@@ -21,6 +21,7 @@ dependencies = [
   "flask",
   "flask-socketio",
   "ftfy",
+  "flash-attn",
   "huggingface_hub[cli]",
   "imageio",
   "imageio-ffmpeg",
@@ -48,3 +49,6 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["demo_utils*", "pipeline*", "utils*", "wan*"]
+
+[tool.uv.extra-build-dependencies]
+flash-attn = ["torch"]

@@ -23,13 +23,15 @@ We tested this repo on the following setup:
 
 ## Installation
 We use [uv](https://github.com/astral-sh/uv) for environment and dependency management:
+
+Recommended GPU template (Runpod): `runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04`
+(includes CUDA toolkit needed to build FlashAttention).
 ```
 git clone https://github.com/SkyworkAI/Matrix-Game.git
 cd Matrix-Game
 uv venv --python 3.10
 uv sync
-# install apex and FlashAttention if needed
-# Our project also depends on [FlashAttention](https://github.com/Dao-AILab/flash-attention)
+# FlashAttention is required and is installed by uv sync.
 ```
 
 ## Quick Start
