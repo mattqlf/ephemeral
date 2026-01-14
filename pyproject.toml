@@ -27,17 +27,10 @@ dependencies = [
   "lmdb",
   "matplotlib",
   "numpy",
-  "nvidia-pyindex",
-  "nvidia-tensorrt",
   "omegaconf",
-  "onnx",
-  "onnxconverter_common",
-  "onnxruntime",
-  "onnxscript",
   "open_clip_torch",
   "opencv-python>=4.9.0.80",
   "pycocotools",
-  "pycuda",
   "pydantic",
   "safetensors",
   "scikit-image",
@@ -55,6 +48,3 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["demo_utils*", "pipeline*", "utils*", "wan*"]
-
-[tool.uv.extra-build-dependencies]
-nvidia-pyindex = ["pip"]

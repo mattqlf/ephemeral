@@ -32,15 +32,6 @@ uv sync
 # Our project also depends on [FlashAttention](https://github.com/Dao-AILab/flash-attention)
 ```
 
-### Troubleshooting (cloud Ubuntu)
-If `uv sync` fails building `nvidia-pyindex` with `ModuleNotFoundError: No module named 'pip'`, either:
-```
-uv pip install pip
-UV_NO_BUILD_ISOLATION=1 uv sync
-```
-or upgrade uv and re-run `uv sync`.
-
-
 ## Quick Start
 ### Download checkpoints
 ```
