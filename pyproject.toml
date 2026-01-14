@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "matrix-game-2.0"
+version = "0.0.1"
+description = "An Open-Source, Real-Time, and Streaming Interactive World Model"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = [
+  "accelerate>=1.1.1",
+  "av",
+  "clip @ git+https://github.com/openai/CLIP.git",
+  "dashscope",
+  "diffusers",
+  "dominate",
+  "easydict",
+  "einops",
+  "flask",
+  "flask-socketio",
+  "ftfy",
+  "huggingface_hub[cli]",
+  "imageio",
+  "imageio-ffmpeg",
+  "lmdb",
+  "matplotlib",
+  "numpy",
+  "nvidia-pyindex",
+  "nvidia-tensorrt",
+  "omegaconf",
+  "onnx",
+  "onnxconverter_common",
+  "onnxruntime",
+  "onnxscript",
+  "open_clip_torch",
+  "opencv-python>=4.9.0.80",
+  "pycocotools",
+  "pycuda",
+  "pydantic",
+  "safetensors",
+  "scikit-image",
+  "sentencepiece",
+  "starlette",
+  "tokenizers>=0.20.3",
+  "torch>=2.4.0",
+  "torchao",
+  "torchvision>=0.19.0",
+  "tqdm",
+  "transformers>=4.49.0",
+  "wandb",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["demo_utils*", "pipeline*", "utils*", "wan*"]

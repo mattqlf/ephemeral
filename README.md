@@ -22,16 +22,14 @@ We tested this repo on the following setup:
 * 64 GB RAM.
 
 ## Installation
-Create a conda environment and install dependencies:
+We use [uv](https://github.com/astral-sh/uv) for environment and dependency management:
 ```
-conda create -n matrix-game-2.0 python=3.10 -y
-conda activate matrix-game-2.0
-# install apex and FlashAttention
-# Our project also depends on [FlashAttention](https://github.com/Dao-AILab/flash-attention)
 git clone https://github.com/SkyworkAI/Matrix-Game.git
-cd Matrix-Game-2
-pip install -r requirements.txt
-python setup.py develop
+cd Matrix-Game
+uv venv --python 3.10
+uv sync
+# install apex and FlashAttention if needed
+# Our project also depends on [FlashAttention](https://github.com/Dao-AILab/flash-attention)
 ```
 
 
@@ -53,6 +51,7 @@ python inference.py \
     --seed 42 \
     --pretrained_model_path {path-to-the-vae-folder}
 ```
+If you did not activate the virtual environment, prefix commands with `uv run` (for example, `uv run python inference.py ...`).
 Or, you can use the script `inference_streaming.py` for generating the interactive videos with your own input actions and images:
 ```
 python inference_streaming.py \
