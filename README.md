@@ -32,6 +32,14 @@ uv sync
 # Our project also depends on [FlashAttention](https://github.com/Dao-AILab/flash-attention)
 ```
 
+### Troubleshooting (cloud Ubuntu)
+If `uv sync` fails building `nvidia-pyindex` with `ModuleNotFoundError: No module named 'pip'`, either:
+```
+uv pip install pip
+UV_NO_BUILD_ISOLATION=1 uv sync
+```
+or upgrade uv and re-run `uv sync`.
+
 
 ## Quick Start
 ### Download checkpoints
@@ -42,7 +50,7 @@ huggingface-cli download Skywork/Matrix-Game-2.0 --local-dir Matrix-Game-2.0
 ### Inference
 After downloading pretrained models, you can use the following command to generate an interactive video with random action trajectories:
 ```
-python inference.py \
+uv run python inference.py \
     --config_path configs/inference_yaml/{your-config}.yaml \
     --checkpoint_path {path-to-the-checkpoint} \
     --img_path {path-to-the-input-image} \
@@ -51,10 +59,9 @@ python inference.py \
     --seed 42 \
     --pretrained_model_path {path-to-the-vae-folder}
 ```
-If you did not activate the virtual environment, prefix commands with `uv run` (for example, `uv run python inference.py ...`).
 Or, you can use the script `inference_streaming.py` for generating the interactive videos with your own input actions and images:
 ```
-python inference_streaming.py \
+uv run python inference_streaming.py \
     --config_path configs/inference_yaml/{your-config}.yaml \
     --checkpoint_path {path-to-the-checkpoint} \
     --output_folder outputs \
