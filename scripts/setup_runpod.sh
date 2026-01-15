@@ -38,7 +38,7 @@ if [[ -d "$WEIGHTS_DIR" && -n "$(ls -A "$WEIGHTS_DIR" 2>/dev/null)" ]]; then
   echo "Model weights already exist, skipping download."
 else
   echo "Downloading model weights (~30GB)..."
-  uv run huggingface-cli download Skywork/Matrix-Game-2.0 --local-dir "$WEIGHTS_DIR"
+  uv run hf download Skywork/Matrix-Game-2.0 --local-dir "$WEIGHTS_DIR"
 fi
 
 echo ""
