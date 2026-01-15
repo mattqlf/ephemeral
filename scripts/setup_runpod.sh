@@ -19,6 +19,9 @@ fi
 # Flash-attn pre-built wheel (PyTorch 2.4 + CUDA 12 + Python 3.10)
 FLASH_ATTN_WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.4cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"
 
+# Remove stale lockfile (may contain old flash-attn reference)
+rm -f uv.lock
+
 # Create venv and install dependencies
 echo "Creating virtual environment..."
 uv venv --python 3.10
