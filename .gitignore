@@ -30,3 +30,5 @@ var/
 
 # Dev
 venv
+.venv/
+uv.lock
