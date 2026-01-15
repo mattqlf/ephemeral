@@ -3,91 +3,159 @@
 <h3 align="center">An Open-Source, Real-Time, and Streaming Interactive World Model</h3>
 </p>
 
-<font size=7><div align='center' >  [[🤗 HuggingFace](https://huggingface.co/Skywork/Matrix-Game-2.0)] [[📖 Technical Report](https://matrix-game-v2.github.io/static/pdf/report.pdf)] [[📑 arXiv](https://arxiv.org/abs/2508.13009)] [[🚀 Project Website](https://matrix-game-v2.github.io/)] </div></font>
+<div align='center'>
+
+[[HuggingFace](https://huggingface.co/Skywork/Matrix-Game-2.0)] [[Technical Report](https://matrix-game-v2.github.io/static/pdf/report.pdf)] [[arXiv](https://arxiv.org/abs/2508.13009)] [[Project Website](https://matrix-game-v2.github.io/)]
+
+</div>
 
 https://github.com/user-attachments/assets/336b0d4a-64f5-4e5c-9b60-6212ddb261c0
 
-## 📝 Overview
-**Matrix-Game-2.0** is an interactive world foundation model for real-time long video generation.  Built upon an auto-regressive diffusion-based image-to-world framework, it can generate real-time[25fps] long videos conditioned on keyboard and mouse inputs, enabling fine-grained control and dynamic scene evolution.
+## Overview
 
-**Related Project**:  If you want to create explorable large-scale 3D scene which can be seamlessly integrated into games or VR applications, please visit [Matrix-3D](https://github.com/SkyworkAI/Matrix-3D) for details.
+**Matrix-Game-2.0** is an interactive world foundation model for real-time long video generation. Built upon an auto-regressive diffusion-based image-to-world framework, it generates real-time (25fps) long videos conditioned on keyboard and mouse inputs, enabling fine-grained control and dynamic scene evolution.
 
-## 🤗 Matrix-Game-2.0 Model
-we provide three pretrained model weights including universal scenes, GTA driving scene and TempleRun game scene. Please refer to our HuggingFace page to reach these resources.
+**Related Project**: For explorable large-scale 3D scenes that integrate with games or VR applications, see [Matrix-3D](https://github.com/SkyworkAI/Matrix-3D).
+
+## Models
+
+Three pretrained model weights are available on [HuggingFace](https://huggingface.co/Skywork/Matrix-Game-2.0):
+
+| Model | Description | Config |
+|-------|-------------|--------|
+| Universal | General scenes | `inference_universal.yaml` |
+| GTA Drive | GTA driving scenes | `inference_gta_drive.yaml` |
+| Temple Run | Temple Run game | `inference_templerun.yaml` |
 
 ## Requirements
-We tested this repo on the following setup:
-* Nvidia GPU with at least 24 GB memory (A100, and H100 are tested).
-* Linux operating system.
-* 64 GB RAM.
+
+- NVIDIA GPU with at least 24GB VRAM (A100, H100 tested)
+- Linux operating system
+- 64GB RAM
 
 ## Installation
-We use [uv](https://github.com/astral-sh/uv) for environment and dependency management:
 
-Recommended GPU template (Runpod): `runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04`
-(includes CUDA toolkit needed to build FlashAttention).
-```
+### RunPod / Cloud GPU (Recommended)
+
+Use template: `runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04`
+
+```bash
 git clone https://github.com/SkyworkAI/Matrix-Game.git
 cd Matrix-Game
-uv venv --python 3.10
-uv sync
-# FlashAttention is required and is installed by uv sync.
+bash scripts/setup_runpod.sh
 ```
 
-## Quick Start
-### Download checkpoints
-```
+This script installs all dependencies and downloads model weights (~30GB).
+
+### Manual Installation
+
+```bash
+git clone https://github.com/SkyworkAI/Matrix-Game.git
+cd Matrix-Game
+
+# Install uv (package manager)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create environment and install dependencies
+uv venv --python 3.10
+uv sync
+
+# Download model weights
 huggingface-cli download Skywork/Matrix-Game-2.0 --local-dir Matrix-Game-2.0
 ```
 
-### Inference
-After downloading pretrained models, you can use the following command to generate an interactive video with random action trajectories:
+## Usage
+
+### Interactive Streaming (Real-time Control)
+
+Generate videos with real-time keyboard/mouse input:
+
+```bash
+# Universal mode
+uv run python inference_streaming.py \
+    --config_path configs/inference_yaml/inference_universal.yaml \
+    --pretrained_model_path Matrix-Game-2.0 \
+    --img_path demo_images/universal/0000.png
+
+# GTA driving mode
+uv run python inference_streaming.py \
+    --config_path configs/inference_yaml/inference_gta_drive.yaml \
+    --pretrained_model_path Matrix-Game-2.0 \
+    --img_path demo_images/gta_drive/0000.png
+
+# Temple Run mode
+uv run python inference_streaming.py \
+    --config_path configs/inference_yaml/inference_templerun.yaml \
+    --pretrained_model_path Matrix-Game-2.0 \
+    --img_path demo_images/templerun/0000.png
 ```
+
+**Controls:**
+- **Universal/GTA**: Camera (I/K/J/L/U) + Movement (W/S/A/D/Q)
+- **Temple Run**: Actions (W=jump, S=slide, A/D=sidestep, Z/C=turn, Q=none)
+
+### Batch Inference (Random Actions)
+
+Generate videos with random action trajectories:
+
+```bash
 uv run python inference.py \
-    --config_path configs/inference_yaml/{your-config}.yaml \
-    --checkpoint_path {path-to-the-checkpoint} \
-    --img_path {path-to-the-input-image} \
+    --config_path configs/inference_yaml/inference_universal.yaml \
+    --pretrained_model_path Matrix-Game-2.0 \
+    --img_path demo_images/universal/0000.png \
     --output_folder outputs \
     --num_output_frames 150 \
-    --seed 42 \
-    --pretrained_model_path {path-to-the-vae-folder}
+    --seed 42
 ```
-Or, you can use the script `inference_streaming.py` for generating the interactive videos with your own input actions and images:
-```
+
+### Scripted Actions
+
+Run with a predefined action sequence:
+
+```bash
 uv run python inference_streaming.py \
-    --config_path configs/inference_yaml/{your-config}.yaml \
-    --checkpoint_path {path-to-the-checkpoint} \
-    --output_folder outputs \
-    --seed 42 \
-    --pretrained_model_path {path-to-the-vae-folder}
+    --config_path configs/inference_yaml/inference_universal.yaml \
+    --pretrained_model_path Matrix-Game-2.0 \
+    --img_path demo_images/universal/0000.png \
+    --actions_path actions.json \
+    --output_name demo_stream \
+    --no_continue_prompt
 ```
 
-### Tips
-- In the current version, upward movement for camera may cause brief rendering glitches (e.g., black screens). A fix is planned for future updates. Adjust movement slightly or change direction to resolve it.
+Action file format (`actions.json`):
+```json
+[
+  {"keyboard": [1, 0, 0, 0], "mouse": [0.1, 0.0]},
+  {"keyboard": [0, 0, 1, 0], "mouse": [0.0, -0.1]}
+]
+```
 
+For Temple Run, omit `mouse` and use a 7-dim keyboard vector.
 
-## ⭐ Acknowledgements
+## Tips
 
-We would like to express our gratitude to:
+- Upward camera movement may cause brief rendering glitches (black screens). Adjust movement slightly or change direction to resolve.
 
-- [Diffusers](https://github.com/huggingface/diffusers) for their excellent diffusion model framework
-- [SkyReels-V2](https://github.com/SkyworkAI/SkyReels-V2) for their strong base model
-- [Self-Forcing](https://github.com/guandeh17/Self-Forcing) for their excellent work
-- [GameFactory](https://github.com/KwaiVGI/GameFactory) for their idea of action control module
-- [MineRL](https://github.com/minerllabs/minerl) for their excellent gym framework
-- [Video-Pre-Training](https://github.com/openai/Video-Pre-Training) for their accurate Inverse Dynamics Model
+## Acknowledgements
 
-## 📄 License
+- [Diffusers](https://github.com/huggingface/diffusers) for their diffusion model framework
+- [SkyReels-V2](https://github.com/SkyworkAI/SkyReels-V2) for the base model
+- [Self-Forcing](https://github.com/guandeh17/Self-Forcing) for their work
+- [GameFactory](https://github.com/KwaiVGI/GameFactory) for the action control module idea
+- [MineRL](https://github.com/minerllabs/minerl) for the gym framework
+- [Video-Pre-Training](https://github.com/openai/Video-Pre-Training) for the Inverse Dynamics Model
+
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Citation
-If you find this codebase useful for your research, please kindly cite our paper:
-```
-  @article{he2025matrix,
-    title={Matrix-Game 2.0: An Open-Source, Real-Time, and Streaming Interactive World Model},
-    author={He, Xianglong and Peng, Chunli and Liu, Zexiang and Wang, Boyang and Zhang, Yifan and Cui, Qi and Kang, Fei and Jiang, Biao and An, Mengyin and Ren, Yangyang and Xu, Baixin and Guo, Hao-Xiang and Gong, Kaixiong and Wu, Cyrus and Li, Wei and Song, Xuchen and Liu, Yang and Li, Eric and Zhou, Yahui},
-    journal={arXiv preprint arXiv:2508.13009},
-    year={2025}
-  }
+
+```bibtex
+@article{he2025matrix,
+  title={Matrix-Game 2.0: An Open-Source, Real-Time, and Streaming Interactive World Model},
+  author={He, Xianglong and Peng, Chunli and Liu, Zexiang and Wang, Boyang and Zhang, Yifan and Cui, Qi and Kang, Fei and Jiang, Biao and An, Mengyin and Ren, Yangyang and Xu, Baixin and Guo, Hao-Xiang and Gong, Kaixiong and Wu, Cyrus and Li, Wei and Song, Xuchen and Liu, Yang and Li, Eric and Zhou, Yahui},
+  journal={arXiv preprint arXiv:2508.13009},
+  year={2025}
+}
 ```
