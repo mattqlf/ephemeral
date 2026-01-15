@@ -9,6 +9,7 @@ description = "An Open-Source, Real-Time, and Streaming Interactive World Model"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
+# Note: flash-attn is required but installed separately via pre-built wheel (see setup script)
 dependencies = [
   "accelerate>=1.1.1",
   "av",
@@ -21,7 +22,6 @@ dependencies = [
   "flask",
   "flask-socketio",
   "ftfy",
-  "flash-attn",
   "huggingface_hub[cli]",
   "imageio",
   "imageio-ffmpeg",
@@ -49,6 +49,3 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["demo_utils*", "pipeline*", "utils*", "wan*"]
-
-[tool.uv.extra-build-dependencies]
-flash-attn = ["torch"]
