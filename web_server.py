@@ -19,6 +19,7 @@ import torch._dynamo
 # Increase dynamo cache size to prevent VAE cache thrashing
 torch._dynamo.config.cache_size_limit = 64
 import numpy as np
+from demo_utils.constant import ZERO_VAE_CACHE
 from PIL import Image
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse
@@ -34,7 +35,6 @@ from pipeline import CausalInferenceStreamingPipeline
 from pipeline.causal_inference import cond_current
 from wan.vae.wanx_vae import get_wanx_vae_wrapper
 from demo_utils.vae_block3 import VAEDecoderWrapper
-from demo_utils.constant import ZERO_VAE_CACHE
 from utils.misc import set_seed
 from utils.conditions import Bench_actions_universal, Bench_actions_gta_drive, Bench_actions_templerun
 from utils.wan_wrapper import WanDiffusionWrapper
@@ -236,7 +236,8 @@ class InferenceEngine:
             # Warmup VAE decoder
             print("  Warming up VAE decoder...")
             dummy_latent = torch.randn([1, num_frame_per_block, 16, 44, 80], device=self.device, dtype=torch.float16)
-            vae_cache = [None] * 4
+            # VAE cache must have same length as ZERO_VAE_CACHE (32 elements), all set to None for first call
+            vae_cache = [None] * len(ZERO_VAE_CACHE)
             _, _ = self.pipeline.vae_decoder(dummy_latent, *vae_cache)
 
         # Clear CUDA cache
