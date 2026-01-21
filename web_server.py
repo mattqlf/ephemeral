@@ -124,6 +124,8 @@ class InferenceEngine:
         current_vae_decoder.to(self.device, torch.float16)
         current_vae_decoder.requires_grad_(False)
         current_vae_decoder.eval()
+        print("  Compiling VAE decoder (this takes ~30s on first run)...")
+        current_vae_decoder.compile(mode="max-autotune-no-cudagraphs")
 
         # Initialize pipeline
         pipeline = CausalInferenceStreamingPipeline(
