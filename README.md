@@ -19,11 +19,11 @@ https://github.com/user-attachments/assets/336b0d4a-64f5-4e5c-9b60-6212ddb261c0
 
 ## Models
 
-| Model | Description | Config |
-|-------|-------------|--------|
-| Universal | General scenes | `inference_universal.yaml` |
-| GTA Drive | Driving scenes | `inference_gta_drive.yaml` |
-| Temple Run | Temple Run game | `inference_templerun.yaml` |
+| Model | Description | Config | Checkpoint |
+|-------|-------------|--------|------------|
+| Universal | General scenes | `inference_universal.yaml` | `base_distilled_model/base_distill.safetensors` |
+| GTA Drive | Driving scenes | `inference_gta_drive.yaml` | `gta_distilled_model/gta_keyboard2dim.safetensors` |
+| Temple Run | Temple Run game | `inference_templerun.yaml` | `templerun_distilled_model/templerun_7dim_onlykey.safetensors` |
 
 ## Requirements
 
@@ -43,14 +43,32 @@ bash scripts/setup_runpod.sh
 
 ## Usage
 
-### Interactive Streaming
+### Web UI (Recommended for Cloud GPUs)
+
+Launch an interactive web interface with real-time video streaming:
+
+```bash
+uv run python web_server.py \
+    --config_path configs/inference_yaml/inference_universal.yaml \
+    --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
+    --pretrained_model_path Matrix-Game-2.0
+```
+
+Then open `http://<your-server-ip>:8080` in your browser. The web UI provides:
+- Real-time video frame streaming via WebSocket
+- On-screen keyboard controls
+- Visual feedback for inputs
+
+### CLI Interactive Streaming
 
 ```bash
 uv run python inference_streaming.py \
     --config_path configs/inference_yaml/inference_universal.yaml \
-    --pretrained_model_path Matrix-Game-2.0 \
-    --img_path demo_images/universal/0000.png
+    --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
+    --pretrained_model_path Matrix-Game-2.0
 ```
+
+The script will prompt for the image path and actions interactively.
 
 **Controls:**
 - **Universal/GTA**: Camera (I/K/J/L/U) + Movement (W/S/A/D/Q)
@@ -61,29 +79,10 @@ uv run python inference_streaming.py \
 ```bash
 uv run python inference.py \
     --config_path configs/inference_yaml/inference_universal.yaml \
+    --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
     --pretrained_model_path Matrix-Game-2.0 \
-    --img_path demo_images/universal/0000.png \
     --output_folder outputs \
     --num_output_frames 150
-```
-
-### Scripted Actions
-
-```bash
-uv run python inference_streaming.py \
-    --config_path configs/inference_yaml/inference_universal.yaml \
-    --pretrained_model_path Matrix-Game-2.0 \
-    --img_path demo_images/universal/0000.png \
-    --actions_path actions.json \
-    --no_continue_prompt
-```
-
-Action format:
-```json
-[
-  {"keyboard": [1, 0, 0, 0], "mouse": [0.1, 0.0]},
-  {"keyboard": [0, 0, 1, 0], "mouse": [0.0, -0.1]}
-]
 ```
 
 ## Tips

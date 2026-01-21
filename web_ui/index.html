@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Matrix-Game 2.0 - Interactive World Model</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 10px;
+            background: linear-gradient(90deg, #00ff88, #00ccff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            color: #888;
+            margin-bottom: 20px;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            width: 100%;
+            max-width: 800px;
+        }
+
+        .video-container {
+            position: relative;
+            background: #111;
+            border: 2px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        #videoCanvas {
+            display: block;
+            width: 640px;
+            height: 352px;
+            background: #000;
+        }
+
+        .overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: monospace;
+        }
+
+        .status {
+            color: #00ff88;
+        }
+
+        .status.waiting {
+            color: #ffaa00;
+        }
+
+        .status.error {
+            color: #ff4444;
+        }
+
+        .controls {
+            display: flex;
+            gap: 20px;
+            align-items: flex-start;
+        }
+
+        .control-group {
+            background: #1a1a1a;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+
+        .control-group h3 {
+            font-size: 14px;
+            color: #888;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .key-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 50px);
+            gap: 5px;
+            justify-content: center;
+        }
+
+        .key {
+            width: 50px;
+            height: 50px;
+            background: #2a2a2a;
+            border: 2px solid #444;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 18px;
+            transition: all 0.1s;
+        }
+
+        .key.active {
+            background: #00ff88;
+            color: #000;
+            border-color: #00ff88;
+            transform: scale(0.95);
+        }
+
+        .key.empty {
+            visibility: hidden;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 14px;
+            font-weight: bold;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        button.primary {
+            background: #00ff88;
+            color: #000;
+        }
+
+        button.primary:hover {
+            background: #00cc6a;
+        }
+
+        button.secondary {
+            background: #333;
+            color: #fff;
+        }
+
+        button.secondary:hover {
+            background: #444;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .image-select {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .image-select label {
+            color: #888;
+            font-size: 14px;
+        }
+
+        .image-select select {
+            padding: 8px 12px;
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 4px;
+            color: #fff;
+            font-size: 14px;
+        }
+
+        .instructions {
+            background: #1a1a1a;
+            padding: 15px 20px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            width: 100%;
+        }
+
+        .instructions h3 {
+            font-size: 14px;
+            color: #00ccff;
+            margin-bottom: 10px;
+        }
+
+        .instructions p {
+            font-size: 13px;
+            color: #888;
+            line-height: 1.6;
+        }
+
+        .instructions code {
+            background: #2a2a2a;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+
+        .block-info {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: monospace;
+        }
+
+        .input-display {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: monospace;
+        }
+
+        .input-display .key-label {
+            color: #00ff88;
+        }
+    </style>
+</head>
+<body>
+    <h1>Matrix-Game 2.0</h1>
+    <p class="subtitle">Interactive World Model - Real-time Video Generation</p>
+
+    <div class="container">
+        <div class="video-container">
+            <canvas id="videoCanvas" width="640" height="352"></canvas>
+            <div class="overlay">
+                <span class="status" id="status">Connecting...</span>
+            </div>
+            <div class="block-info" id="blockInfo">Block: 0</div>
+            <div class="input-display" id="inputDisplay">
+                Camera: <span class="key-label" id="mouseLabel">-</span> |
+                Move: <span class="key-label" id="keyboardLabel">-</span>
+            </div>
+        </div>
+
+        <div class="controls">
+            <div class="control-group">
+                <h3>Camera (IJKL)</h3>
+                <div class="key-grid">
+                    <div class="key empty"></div>
+                    <div class="key" data-key="i">I</div>
+                    <div class="key empty"></div>
+                    <div class="key" data-key="j">J</div>
+                    <div class="key" data-key="u">U</div>
+                    <div class="key" data-key="l">L</div>
+                    <div class="key empty"></div>
+                    <div class="key" data-key="k">K</div>
+                    <div class="key empty"></div>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <h3>Movement (WASD)</h3>
+                <div class="key-grid">
+                    <div class="key empty"></div>
+                    <div class="key" data-key="w">W</div>
+                    <div class="key empty"></div>
+                    <div class="key" data-key="a">A</div>
+                    <div class="key" data-key="q">Q</div>
+                    <div class="key" data-key="d">D</div>
+                    <div class="key empty"></div>
+                    <div class="key" data-key="s">S</div>
+                    <div class="key empty"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="image-select">
+            <label for="imageSelect">Start Image:</label>
+            <select id="imageSelect">
+                <option value="demo_images/universal/0000.png">Universal - Default</option>
+            </select>
+        </div>
+
+        <div class="action-buttons">
+            <button id="startBtn" class="primary">Start Generation</button>
+            <button id="stopBtn" class="secondary" disabled>Stop</button>
+        </div>
+
+        <div class="instructions">
+            <h3>Instructions</h3>
+            <p>
+                1. Click <code>Start Generation</code> to begin.<br>
+                2. When prompted, press camera keys (<code>I/J/K/L/U</code>) and movement keys (<code>W/A/S/D/Q</code>).<br>
+                3. The model will generate video frames based on your input.<br>
+                4. <code>U</code> = no camera move, <code>Q</code> = no movement.<br>
+                5. Press <code>Stop</code> or close the window to end.
+            </p>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('videoCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusEl = document.getElementById('status');
+        const blockInfoEl = document.getElementById('blockInfo');
+        const mouseLabelEl = document.getElementById('mouseLabel');
+        const keyboardLabelEl = document.getElementById('keyboardLabel');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const imageSelect = document.getElementById('imageSelect');
+
+        let ws = null;
+        let isRunning = false;
+        let waitingForAction = false;
+        let currentMouseKey = 'u';
+        let currentKeyboardKey = 'q';
+        let mode = 'universal';
+
+        const CAMERA_KEYS = ['i', 'j', 'k', 'l', 'u'];
+        const MOVEMENT_KEYS = ['w', 'a', 's', 'd', 'q'];
+        const TEMPLERUN_KEYS = ['w', 's', 'a', 'd', 'z', 'c', 'q'];
+
+        // Load available images
+        async function loadImages() {
+            try {
+                const response = await fetch('/api/images');
+                const data = await response.json();
+                imageSelect.innerHTML = '';
+                data.images.forEach(img => {
+                    const option = document.createElement('option');
+                    option.value = img;
+                    option.textContent = img.replace('demo_images/', '');
+                    imageSelect.appendChild(option);
+                });
+            } catch (e) {
+                console.error('Failed to load images:', e);
+            }
+        }
+
+        function setStatus(text, className = '') {
+            statusEl.textContent = text;
+            statusEl.className = 'status ' + className;
+        }
+
+        function updateKeyDisplay(key, isCamera) {
+            if (isCamera) {
+                currentMouseKey = key;
+                mouseLabelEl.textContent = key.toUpperCase();
+            } else {
+                currentKeyboardKey = key;
+                keyboardLabelEl.textContent = key.toUpperCase();
+            }
+        }
+
+        function highlightKey(key) {
+            document.querySelectorAll('.key').forEach(el => {
+                el.classList.remove('active');
+                if (el.dataset.key === key) {
+                    el.classList.add('active');
+                }
+            });
+        }
+
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+            ws.onopen = () => {
+                setStatus('Connected - Ready to start');
+                startBtn.disabled = false;
+            };
+
+            ws.onclose = () => {
+                setStatus('Disconnected', 'error');
+                startBtn.disabled = true;
+                stopBtn.disabled = true;
+                isRunning = false;
+                setTimeout(connect, 2000);
+            };
+
+            ws.onerror = (e) => {
+                console.error('WebSocket error:', e);
+                setStatus('Connection error', 'error');
+            };
+
+            ws.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+                handleMessage(msg);
+            };
+        }
+
+        function handleMessage(msg) {
+            switch (msg.type) {
+                case 'frame':
+                    displayFrame(msg.data);
+                    blockInfoEl.textContent = `Block: ${msg.block}`;
+                    break;
+
+                case 'ready':
+                    mode = msg.mode || 'universal';
+                    setStatus('Ready - Waiting for input', 'waiting');
+                    updateControlsForMode(mode);
+                    break;
+
+                case 'request_action':
+                    waitingForAction = true;
+                    setStatus(`Block ${msg.block} - Press keys to continue`, 'waiting');
+                    break;
+
+                case 'block_complete':
+                    waitingForAction = false;
+                    setStatus(`Block ${msg.block} complete - Processing...`);
+                    break;
+
+                case 'complete':
+                    setStatus('Generation complete');
+                    isRunning = false;
+                    waitingForAction = false;
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    break;
+
+                case 'stopped':
+                    setStatus('Stopped');
+                    isRunning = false;
+                    waitingForAction = false;
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    break;
+
+                case 'error':
+                    setStatus(`Error: ${msg.message}`, 'error');
+                    isRunning = false;
+                    waitingForAction = false;
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    break;
+            }
+        }
+
+        function displayFrame(base64Data) {
+            const img = new Image();
+            img.onload = () => {
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            };
+            img.src = 'data:image/jpeg;base64,' + base64Data;
+        }
+
+        function updateControlsForMode(mode) {
+            // Update control visibility based on mode
+            const cameraGroup = document.querySelector('.control-group:first-child');
+            if (mode === 'templerun') {
+                cameraGroup.style.display = 'none';
+            } else {
+                cameraGroup.style.display = 'block';
+            }
+        }
+
+        function sendAction() {
+            if (ws && ws.readyState === WebSocket.OPEN && waitingForAction) {
+                ws.send(JSON.stringify({
+                    type: 'action',
+                    keyboard: currentKeyboardKey,
+                    mouse: currentMouseKey
+                }));
+                waitingForAction = false;
+                setStatus('Processing...');
+            }
+        }
+
+        // Keyboard handling
+        document.addEventListener('keydown', (e) => {
+            const key = e.key.toLowerCase();
+
+            if (mode === 'templerun') {
+                if (TEMPLERUN_KEYS.includes(key)) {
+                    updateKeyDisplay(key, false);
+                    highlightKey(key);
+                    if (waitingForAction) {
+                        sendAction();
+                    }
+                }
+            } else {
+                if (CAMERA_KEYS.includes(key)) {
+                    updateKeyDisplay(key, true);
+                    highlightKey(key);
+                } else if (MOVEMENT_KEYS.includes(key)) {
+                    updateKeyDisplay(key, false);
+                    highlightKey(key);
+                }
+
+                // Send action when both are pressed (or use Enter)
+                if (e.key === 'Enter' && waitingForAction) {
+                    sendAction();
+                }
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            const key = e.key.toLowerCase();
+            document.querySelectorAll('.key').forEach(el => {
+                if (el.dataset.key === key) {
+                    el.classList.remove('active');
+                }
+            });
+        });
+
+        // Click handling for on-screen keys
+        document.querySelectorAll('.key').forEach(el => {
+            el.addEventListener('click', () => {
+                const key = el.dataset.key;
+                if (!key) return;
+
+                if (CAMERA_KEYS.includes(key)) {
+                    updateKeyDisplay(key, true);
+                } else if (MOVEMENT_KEYS.includes(key) || TEMPLERUN_KEYS.includes(key)) {
+                    updateKeyDisplay(key, false);
+                }
+
+                highlightKey(key);
+                setTimeout(() => el.classList.remove('active'), 200);
+
+                if (waitingForAction && mode === 'templerun') {
+                    sendAction();
+                }
+            });
+        });
+
+        // Auto-send action for universal mode when both keys are set
+        document.addEventListener('keydown', (e) => {
+            if (mode !== 'templerun' && waitingForAction) {
+                // Small delay to allow both keys to be registered
+                setTimeout(() => {
+                    if (waitingForAction && currentMouseKey !== '-' && currentKeyboardKey !== '-') {
+                        sendAction();
+                    }
+                }, 100);
+            }
+        });
+
+        startBtn.addEventListener('click', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                isRunning = true;
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                currentMouseKey = 'u';
+                currentKeyboardKey = 'q';
+                updateKeyDisplay('u', true);
+                updateKeyDisplay('q', false);
+
+                ws.send(JSON.stringify({
+                    type: 'start',
+                    image: imageSelect.value
+                }));
+                setStatus('Starting...', 'waiting');
+            }
+        });
+
+        stopBtn.addEventListener('click', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'stop' }));
+                setStatus('Stopping...');
+            }
+        });
+
+        // Initialize
+        loadImages();
+        connect();
+    </script>
+</body>
+</html>

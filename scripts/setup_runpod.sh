@@ -32,6 +32,9 @@ uv sync
 echo "Installing flash-attn (pre-built wheel)..."
 uv pip install "$FLASH_ATTN_WHEEL"
 
+echo "Installing setuptools (required for torch.compile)..."
+uv pip install setuptools
+
 # Download model weights
 WEIGHTS_DIR="Matrix-Game-2.0"
 if [[ -d "$WEIGHTS_DIR" && -n "$(ls -A "$WEIGHTS_DIR" 2>/dev/null)" ]]; then
@@ -46,8 +49,20 @@ echo "============================================"
 echo "Setup complete!"
 echo "============================================"
 echo ""
+echo "To run the web UI (recommended):"
+echo ""
+echo "  uv run python web_server.py \\"
+echo "      --config_path configs/inference_yaml/inference_universal.yaml \\"
+echo "      --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \\"
+echo "      --pretrained_model_path Matrix-Game-2.0 \\"
+echo "      --port 8888"
+echo ""
+echo "Then open the Jupyter Lab HTTP link in RunPod to access the web UI."
+echo ""
+echo "Or run CLI mode:"
+echo ""
 echo "  uv run python inference_streaming.py \\"
 echo "      --config_path configs/inference_yaml/inference_universal.yaml \\"
-echo "      --pretrained_model_path Matrix-Game-2.0 \\"
-echo "      --img_path demo_images/universal/0000.png"
+echo "      --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \\"
+echo "      --pretrained_model_path Matrix-Game-2.0"
 echo ""
