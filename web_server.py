@@ -68,48 +68,78 @@ class InferenceEngine:
         self.mode = self.config.get('mode', 'universal')
 
     def _init_models(self):
-        print("Loading models...")
+        import concurrent.futures
+        import warnings
 
-        # Initialize generator
+        print("Loading models (parallel)...")
+
+        # Suppress FutureWarnings about weights_only
+        warnings.filterwarnings("ignore", category=FutureWarning, message=".*weights_only.*")
+
+        # Initialize generator structure (no weights yet)
         generator = WanDiffusionWrapper(
             **getattr(self.config, "model_kwargs", {}), is_causal=True)
 
-        # Initialize VAE decoder
+        # Define loading functions for parallel execution
+        def load_vae_decoder_weights():
+            print("  Loading VAE decoder weights...")
+            vae_path = os.path.join(self.args.pretrained_model_path, "Wan2.1_VAE.pth")
+            vae_state_dict = torch.load(vae_path, map_location="cpu", mmap=True)
+            decoder_state_dict = {k: v for k, v in vae_state_dict.items()
+                                  if 'decoder.' in k or 'conv2' in k}
+            print("  VAE decoder weights loaded")
+            return decoder_state_dict
+
+        def load_main_checkpoint():
+            if self.args.checkpoint_path:
+                print(f"  Loading main checkpoint...")
+                state_dict = load_file(self.args.checkpoint_path)
+                print("  Main checkpoint loaded")
+                return state_dict
+            return None
+
+        def load_vae_encoder():
+            print("  Loading VAE encoder...")
+            vae = get_wanx_vae_wrapper(self.args.pretrained_model_path, torch.float16)
+            vae.requires_grad_(False)
+            vae.eval()
+            print("  VAE encoder loaded")
+            return vae
+
+        # Load all weights in parallel
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            future_decoder = executor.submit(load_vae_decoder_weights)
+            future_checkpoint = executor.submit(load_main_checkpoint)
+            future_encoder = executor.submit(load_vae_encoder)
+
+            decoder_state_dict = future_decoder.result()
+            main_checkpoint = future_checkpoint.result()
+            vae_encoder = future_encoder.result()
+
+        print("Moving models to GPU...")
+
+        # Initialize VAE decoder with loaded weights
         current_vae_decoder = VAEDecoderWrapper()
-        vae_state_dict = torch.load(
-            os.path.join(self.args.pretrained_model_path, "Wan2.1_VAE.pth"),
-            map_location="cpu"
-        )
-        decoder_state_dict = {}
-        for key, value in vae_state_dict.items():
-            if 'decoder.' in key or 'conv2' in key:
-                decoder_state_dict[key] = value
         current_vae_decoder.load_state_dict(decoder_state_dict)
         current_vae_decoder.to(self.device, torch.float16)
         current_vae_decoder.requires_grad_(False)
         current_vae_decoder.eval()
-        # Skip torch.compile for web server to avoid startup delay
-        # current_vae_decoder.compile(mode="max-autotune-no-cudagraphs")
 
         # Initialize pipeline
         pipeline = CausalInferenceStreamingPipeline(
             self.config, generator=generator, vae_decoder=current_vae_decoder)
 
-        if self.args.checkpoint_path:
-            print(f"Loading checkpoint: {self.args.checkpoint_path}")
-            state_dict = load_file(self.args.checkpoint_path)
-            pipeline.generator.load_state_dict(state_dict)
+        if main_checkpoint:
+            pipeline.generator.load_state_dict(main_checkpoint)
 
         self.pipeline = pipeline.to(device=self.device, dtype=self.weight_dtype)
         self.pipeline.vae_decoder.to(torch.float16)
 
-        # Initialize VAE encoder
-        vae = get_wanx_vae_wrapper(self.args.pretrained_model_path, torch.float16)
-        vae.requires_grad_(False)
-        vae.eval()
-        self.vae = vae.to(self.device, self.weight_dtype)
+        # Move VAE encoder to GPU
+        self.vae = vae_encoder.to(self.device, self.weight_dtype)
 
         print("Models loaded successfully!")
+        print("\n  TIP: Keep this server running to avoid reloading models.\n")
 
     def _resizecrop(self, image, th, tw):
         w, h = image.size
