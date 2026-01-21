@@ -36,11 +36,11 @@
             image-rendering: pixelated;
         }
 
-        /* Hero background */
+        /* Hero background - zoomed out */
         .bg-image {
             position: fixed;
             inset: 0;
-            background: url('/assets/hero.png') center/cover no-repeat;
+            background: url('/assets/hero.png') center/60% no-repeat;
             opacity: 0.35;
             image-rendering: pixelated;
         }
@@ -71,10 +71,8 @@
             z-index: 1;
             height: 100%;
             display: flex;
-            flex-direction: column;
             justify-content: center;
             align-items: center;
-            padding: 48px;
         }
 
         /* ASCII frame */
@@ -83,10 +81,14 @@
             padding: 64px 80px;
             position: relative;
             background: rgba(10, 10, 10, 0.7);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
         }
 
         .frame::before {
-            content: '┌─────────────────────────────────────┐';
+            content: '┌───────────────────────────────┐';
             position: absolute;
             top: -1px;
             left: 50%;
@@ -97,7 +99,7 @@
         }
 
         .frame::after {
-            content: '└─────────────────────────────────────┘';
+            content: '└───────────────────────────────┘';
             position: absolute;
             bottom: -1px;
             left: 50%;
@@ -109,9 +111,9 @@
 
         h1 {
             font-family: 'Pixel', 'Courier New', monospace;
-            font-size: clamp(32px, 6vw, 48px);
+            font-size: clamp(28px, 5vw, 42px);
             font-weight: 400;
-            letter-spacing: 0.1em;
+            letter-spacing: 0.15em;
             margin-bottom: 40px;
             color: var(--text);
             text-transform: uppercase;
@@ -119,8 +121,6 @@
         }
 
         .tagline {
-            max-width: 440px;
-            text-align: center;
             font-size: 13px;
             color: var(--text-dim);
             line-height: 2;
@@ -142,8 +142,9 @@
         .cta {
             display: inline-flex;
             align-items: center;
-            gap: 12px;
-            padding: 12px 24px;
+            justify-content: center;
+            gap: 8px;
+            padding: 12px 32px;
             background: transparent;
             border: 1px solid var(--text-dim);
             color: var(--text);
@@ -170,33 +171,6 @@
             opacity: 1;
         }
 
-        .corner {
-            position: fixed;
-            font-size: 10px;
-            color: var(--text-dim);
-            opacity: 0.5;
-            letter-spacing: 0.1em;
-        }
-
-        .corner.tl { top: 20px; left: 20px; }
-        .corner.tr { top: 20px; right: 20px; }
-        .corner.bl { bottom: 20px; left: 20px; }
-        .corner.br { bottom: 20px; right: 20px; }
-
-        .corner.bl::before {
-            content: '░░░░░';
-            display: block;
-            margin-bottom: 4px;
-            opacity: 0.3;
-        }
-
-        .corner.br::after {
-            content: '░░░░░';
-            display: block;
-            margin-top: 4px;
-            opacity: 0.3;
-        }
-
         /* Blinking cursor */
         .cursor {
             display: inline-block;
@@ -217,11 +191,6 @@
     <div class="bg-image"></div>
     <div class="bg-vignette"></div>
     <div class="bg-scanlines"></div>
-
-    <div class="corner tl">SYS.2025</div>
-    <div class="corner tr">v2.0</div>
-    <div class="corner bl">READY</div>
-    <div class="corner br">OK</div>
 
     <div class="container">
         <div class="frame">

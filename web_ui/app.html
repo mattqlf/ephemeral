@@ -4,10 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ephemeral</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
+        @font-face {
+            font-family: 'Pixel';
+            src: url('https://fonts.cdnfonts.com/s/75325/PressStart2P-Regular.woff') format('woff');
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -15,18 +17,14 @@
         }
 
         :root {
-            --bg-primary: #0a0a0a;
-            --bg-secondary: #111111;
-            --bg-tertiary: #161616;
-            --border-color: #1f1f1f;
-            --border-light: #2a2a2a;
-            --text-primary: #ffffff;
-            --text-secondary: #888888;
-            --text-muted: #555555;
+            --bg: #0a0a0a;
+            --bg-panel: rgba(10, 10, 10, 0.85);
+            --text: #e0e0e0;
+            --text-dim: #4a4a4a;
+            --text-muted: #333;
             --accent: #00d4aa;
-            --accent-dim: rgba(0, 212, 170, 0.15);
-            --font-mono: 'JetBrains Mono', monospace;
-            --font-sans: 'Inter', -apple-system, sans-serif;
+            --border: #1a1a1a;
+            --border-light: #2a2a2a;
         }
 
         html, body {
@@ -35,18 +33,32 @@
         }
 
         body {
-            font-family: var(--font-sans);
-            background: var(--bg-primary);
-            color: var(--text-primary);
+            font-family: 'Courier New', monospace;
+            background: var(--bg);
+            color: var(--text);
+            image-rendering: pixelated;
+        }
+
+        /* Scanline effect */
+        .bg-scanlines {
+            position: fixed;
+            inset: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.1) 2px,
+                rgba(0, 0, 0, 0.1) 4px
+            );
+            pointer-events: none;
+            z-index: 1000;
         }
 
         .app {
             display: grid;
-            grid-template-columns: 1fr 280px;
+            grid-template-columns: 1fr 260px;
             grid-template-rows: auto 1fr;
             height: 100vh;
-            gap: 1px;
-            background: var(--border-color);
         }
 
         /* Header */
@@ -55,43 +67,31 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 12px 24px;
-            background: var(--bg-primary);
-            border-bottom: 1px solid var(--border-color);
+            padding: 12px 20px;
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border);
         }
 
         .logo {
-            display: flex;
-            align-items: center;
-            gap: 12px;
+            font-family: 'Pixel', 'Courier New', monospace;
+            font-size: 12px;
+            letter-spacing: 0.1em;
             text-decoration: none;
-            color: inherit;
+            color: var(--text);
+            text-transform: uppercase;
         }
 
-        .logo-text {
-            font-family: var(--font-mono);
-            font-size: 16px;
-            font-weight: 500;
-            letter-spacing: -0.5px;
+        .logo:hover {
+            color: var(--accent);
         }
 
         .header-meta {
             display: flex;
             align-items: center;
             gap: 20px;
-            font-family: var(--font-mono);
-            font-size: 11px;
-            color: var(--text-muted);
-        }
-
-        .header-meta span {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .header-meta strong {
-            color: var(--text-secondary);
+            font-size: 10px;
+            color: var(--text-dim);
+            letter-spacing: 0.05em;
         }
 
         .status-badge {
@@ -99,18 +99,15 @@
             align-items: center;
             gap: 8px;
             padding: 6px 12px;
-            font-family: var(--font-mono);
-            font-size: 11px;
-            color: var(--text-muted);
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
+            font-size: 10px;
+            color: var(--text-dim);
+            border: 1px solid var(--border);
         }
 
         .status-dot {
             width: 6px;
             height: 6px;
-            border-radius: 50%;
-            background: var(--text-muted);
+            background: var(--text-dim);
         }
 
         .status-dot.connected {
@@ -120,25 +117,25 @@
 
         .status-dot.waiting {
             background: var(--accent);
-            animation: pulse 1.5s infinite;
+            animation: blink 1s step-end infinite;
         }
 
         .status-dot.error {
             background: #ff4444;
         }
 
-        @keyframes pulse {
+        @keyframes blink {
             0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
+            50% { opacity: 0; }
         }
 
         /* Video section */
         .video-section {
-            background: var(--bg-primary);
+            background: var(--bg);
             display: flex;
             flex-direction: column;
-            padding: 20px;
-            gap: 16px;
+            padding: 16px;
+            gap: 12px;
         }
 
         .video-container {
@@ -147,17 +144,14 @@
             align-items: center;
             justify-content: center;
             background: #000;
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            overflow: hidden;
+            border: 1px solid var(--border);
             position: relative;
         }
 
         #videoCanvas {
             max-width: 100%;
             max-height: 100%;
-            width: auto;
-            height: auto;
+            image-rendering: pixelated;
         }
 
         .video-overlay {
@@ -165,92 +159,67 @@
             bottom: 0;
             left: 0;
             right: 0;
-            padding: 12px 16px;
+            padding: 10px 14px;
             background: linear-gradient(transparent, rgba(0,0,0,0.9));
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-end;
-            font-family: var(--font-mono);
-            font-size: 11px;
-            color: var(--text-secondary);
+            font-size: 10px;
+            color: var(--text-dim);
+            letter-spacing: 0.05em;
         }
 
-        /* Image selection bar */
+        /* Image bar */
         .image-bar {
             display: flex;
             align-items: center;
-            gap: 12px;
-            padding: 12px 16px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
+            gap: 10px;
+            padding: 10px 14px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
         }
 
         .image-bar-label {
-            font-family: var(--font-mono);
-            font-size: 10px;
-            color: var(--text-muted);
+            font-size: 9px;
+            color: var(--text-dim);
             text-transform: uppercase;
-            letter-spacing: 0.5px;
-            white-space: nowrap;
+            letter-spacing: 0.1em;
         }
 
         .image-tabs {
             display: flex;
-            gap: 2px;
         }
 
         .tab-btn {
-            padding: 6px 10px;
-            font-family: var(--font-mono);
-            font-size: 10px;
+            padding: 5px 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 9px;
             background: transparent;
-            border: 1px solid var(--border-color);
-            color: var(--text-muted);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
             cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
             transition: all 0.15s;
         }
 
-        .tab-btn:first-child { border-radius: 4px 0 0 4px; }
-        .tab-btn:last-child { border-radius: 0 4px 4px 0; }
-
-        .tab-btn:hover { border-color: var(--border-light); color: var(--text-secondary); }
-        .tab-btn.active { background: var(--bg-tertiary); border-color: var(--border-light); color: var(--text-primary); }
+        .tab-btn:first-child { border-right: none; }
+        .tab-btn:hover { border-color: var(--border-light); color: var(--text); }
+        .tab-btn.active { background: var(--border); color: var(--text); }
 
         .image-select-wrapper {
             flex: 1;
-            position: relative;
         }
 
         .image-select-wrapper select {
             width: 100%;
-            padding: 8px 32px 8px 12px;
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            color: var(--text-primary);
-            font-family: var(--font-mono);
-            font-size: 11px;
+            padding: 6px 10px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-family: 'Courier New', monospace;
+            font-size: 10px;
             cursor: pointer;
             outline: none;
-            appearance: none;
-            border-radius: 4px;
         }
 
-        .image-select-wrapper select:hover { border-color: var(--border-light); }
-
-        .image-select-wrapper::after {
-            content: '';
-            position: absolute;
-            right: 12px;
-            top: 50%;
-            transform: translateY(-50%);
-            border-left: 4px solid transparent;
-            border-right: 4px solid transparent;
-            border-top: 4px solid var(--text-muted);
-            pointer-events: none;
-        }
-
-        /* Upload inline */
         .upload-inline {
             display: none;
             flex: 1;
@@ -261,14 +230,13 @@
         .upload-inline.active { display: flex; }
 
         .upload-btn {
-            padding: 8px 14px;
-            background: var(--bg-tertiary);
+            padding: 6px 12px;
+            background: transparent;
             border: 1px dashed var(--border-light);
-            color: var(--text-secondary);
-            font-family: var(--font-mono);
-            font-size: 11px;
+            color: var(--text-dim);
+            font-family: 'Courier New', monospace;
+            font-size: 10px;
             cursor: pointer;
-            border-radius: 4px;
             transition: all 0.15s;
         }
 
@@ -287,18 +255,17 @@
         .upload-preview.active { display: flex; }
 
         .upload-preview img {
-            width: 48px;
-            height: 27px;
+            width: 40px;
+            height: 22px;
             object-fit: cover;
-            border-radius: 2px;
-            border: 1px solid var(--border-color);
+            border: 1px solid var(--border);
+            image-rendering: pixelated;
         }
 
         .upload-preview-name {
             flex: 1;
-            font-family: var(--font-mono);
-            font-size: 11px;
-            color: var(--text-secondary);
+            font-size: 10px;
+            color: var(--text-dim);
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -317,21 +284,24 @@
 
         /* Control panel */
         .control-panel {
-            background: var(--bg-primary);
+            background: var(--bg-panel);
+            border-left: 1px solid var(--border);
             display: flex;
             flex-direction: column;
             padding: 16px;
             gap: 16px;
-            overflow-y: auto;
         }
 
         .section-title {
-            font-family: var(--font-mono);
-            font-size: 10px;
-            color: var(--text-muted);
+            font-size: 9px;
+            color: var(--text-dim);
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 0.1em;
             margin-bottom: 8px;
+        }
+
+        .section-title span {
+            color: var(--accent);
         }
 
         /* Key controls */
@@ -341,31 +311,22 @@
             gap: 12px;
         }
 
-        .control-group {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-
         .key-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
-            gap: 4px;
+            gap: 3px;
         }
 
         .key {
             aspect-ratio: 1;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
+            background: var(--bg);
+            border: 1px solid var(--border);
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            font-family: var(--font-mono);
-            font-size: 13px;
-            font-weight: 500;
-            color: var(--text-secondary);
+            font-size: 11px;
+            color: var(--text-dim);
             cursor: pointer;
             transition: all 0.1s;
             gap: 1px;
@@ -373,144 +334,109 @@
 
         .key:hover:not(.disabled):not(.empty) {
             border-color: var(--border-light);
-            color: var(--text-primary);
+            color: var(--text);
         }
 
         .key.active {
             background: var(--accent);
             border-color: var(--accent);
-            color: var(--bg-primary);
+            color: var(--bg);
         }
 
-        .key.empty {
-            visibility: hidden;
-        }
-
-        .key.disabled {
-            opacity: 0.25;
-            pointer-events: none;
-        }
+        .key.empty { visibility: hidden; }
+        .key.disabled { opacity: 0.2; pointer-events: none; }
 
         .key-hint {
-            font-size: 7px;
+            font-size: 6px;
             color: var(--text-muted);
             text-transform: uppercase;
         }
 
-        .key.active .key-hint {
-            color: var(--bg-primary);
-        }
+        .key.active .key-hint { color: var(--bg); }
 
-        /* Input sequence display */
+        /* Sequence display */
         .sequence-display {
             display: flex;
             align-items: center;
             gap: 8px;
             padding: 10px 12px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-        }
-
-        .sequence-step {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-family: var(--font-mono);
-            font-size: 11px;
-            color: var(--text-muted);
+            background: var(--bg);
+            border: 1px solid var(--border);
+            font-size: 10px;
+            color: var(--text-dim);
         }
 
         .sequence-step.active { color: var(--accent); }
-        .sequence-step.complete { color: var(--text-primary); }
+        .sequence-step.complete { color: var(--text); }
+        .sequence-value { font-weight: bold; min-width: 14px; }
+        .sequence-arrow { color: var(--text-muted); }
 
-        .sequence-value {
-            font-weight: 500;
-            min-width: 16px;
-            text-align: center;
-        }
-
-        .sequence-arrow {
-            color: var(--text-muted);
-        }
-
-        /* Hint text */
+        /* Hint */
         .hint-text {
-            font-family: var(--font-mono);
-            font-size: 10px;
+            font-size: 9px;
             color: var(--text-muted);
-            line-height: 1.5;
-            padding: 10px 12px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
+            line-height: 1.6;
+            padding: 10px;
+            background: var(--bg);
+            border: 1px solid var(--border);
         }
 
         .hint-text code {
-            background: var(--bg-tertiary);
-            padding: 1px 4px;
-            border-radius: 2px;
+            color: var(--text-dim);
         }
 
-        /* Action buttons */
+        /* Buttons */
         .action-buttons {
             display: flex;
-            gap: 8px;
+            gap: 6px;
             margin-top: auto;
         }
 
         .btn {
             flex: 1;
-            padding: 12px 16px;
-            font-family: var(--font-mono);
-            font-size: 11px;
-            font-weight: 500;
+            padding: 10px 14px;
+            font-family: 'Courier New', monospace;
+            font-size: 10px;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.1em;
             border: 1px solid var(--border-light);
             background: transparent;
-            color: var(--text-primary);
+            color: var(--text);
             cursor: pointer;
-            border-radius: 4px;
             transition: all 0.15s;
         }
 
         .btn:hover:not(:disabled) {
-            background: var(--text-primary);
-            color: var(--bg-primary);
+            background: var(--text);
+            color: var(--bg);
         }
 
-        .btn:disabled {
-            opacity: 0.3;
-            pointer-events: none;
-        }
+        .btn:disabled { opacity: 0.3; pointer-events: none; }
 
         .btn-primary {
             background: var(--accent);
             border-color: var(--accent);
-            color: var(--bg-primary);
+            color: var(--bg);
         }
 
         .btn-primary:hover:not(:disabled) {
             background: #00e8bb;
             border-color: #00e8bb;
-            color: var(--bg-primary);
         }
 
-        /* Hidden file input */
         #fileInput { display: none; }
     </style>
 </head>
 <body>
+    <div class="bg-scanlines"></div>
+
     <div class="app">
         <header>
-            <a href="index.html" class="logo">
-                <span class="logo-text">Ephemeral</span>
-            </a>
+            <a href="index.html" class="logo">Ephemeral</a>
 
             <div class="header-meta">
                 <span>Block: <strong id="blockNum">0</strong></span>
-                <span>Res: <strong>640x352</strong></span>
+                <span>640x352</span>
             </div>
 
             <div class="status-badge">
@@ -523,7 +449,7 @@
             <div class="video-container">
                 <canvas id="videoCanvas" width="640" height="352"></canvas>
                 <div class="video-overlay">
-                    <span id="inputDisplay">Waiting for input...</span>
+                    <span id="inputDisplay">> waiting for input...</span>
                 </div>
             </div>
 
@@ -539,15 +465,11 @@
                     </select>
                 </div>
                 <div class="upload-inline" id="uploadTab">
-                    <button class="upload-btn" id="uploadBtn">Choose or drop image...</button>
+                    <button class="upload-btn" id="uploadBtn">> drop or select image</button>
                     <div class="upload-preview" id="uploadPreview">
                         <img id="previewImg" src="" alt="">
                         <span class="upload-preview-name" id="previewName"></span>
-                        <button class="upload-remove" id="removeUpload">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M18 6L6 18M6 6l12 12"/>
-                            </svg>
-                        </button>
+                        <button class="upload-remove" id="removeUpload">×</button>
                     </div>
                 </div>
                 <input type="file" id="fileInput" accept="image/*">
@@ -556,10 +478,10 @@
 
         <div class="control-panel">
             <div>
-                <div class="section-title">Controls</div>
+                <div class="section-title"><span>></span> Controls</div>
                 <div class="controls-grid">
-                    <div class="control-group">
-                        <div class="section-title" style="margin-bottom: 4px;">Camera</div>
+                    <div>
+                        <div class="section-title">Camera</div>
                         <div class="key-grid" id="cameraSection">
                             <div class="key empty"></div>
                             <div class="key" data-key="i" data-type="camera"><span>I</span><span class="key-hint">up</span></div>
@@ -572,8 +494,8 @@
                             <div class="key empty"></div>
                         </div>
                     </div>
-                    <div class="control-group">
-                        <div class="section-title" style="margin-bottom: 4px;">Movement</div>
+                    <div>
+                        <div class="section-title">Movement</div>
                         <div class="key-grid" id="movementSection">
                             <div class="key empty"></div>
                             <div class="key" data-key="w" data-type="movement"><span>W</span><span class="key-hint">fwd</span></div>
@@ -590,26 +512,24 @@
             </div>
 
             <div>
-                <div class="section-title">Input Sequence</div>
+                <div class="section-title"><span>></span> Sequence</div>
                 <div class="sequence-display">
                     <div class="sequence-step" id="step1">
-                        <span>Cam:</span>
-                        <span class="sequence-value" id="cameraValue">-</span>
+                        cam: <span class="sequence-value" id="cameraValue">-</span>
                     </div>
-                    <span class="sequence-arrow">&rarr;</span>
+                    <span class="sequence-arrow">→</span>
                     <div class="sequence-step" id="step2">
-                        <span>Move:</span>
-                        <span class="sequence-value" id="moveValue">-</span>
+                        mov: <span class="sequence-value" id="moveValue">-</span>
                     </div>
                 </div>
             </div>
 
             <div class="hint-text">
-                Press <code>Camera</code> then <code>Movement</code>. Auto-sends after both. Use keyboard or click the keys above.
+                Press <code>camera</code> then <code>movement</code>. Auto-sends after both.
             </div>
 
             <div class="action-buttons">
-                <button class="btn btn-primary" id="startBtn">Start</button>
+                <button class="btn btn-primary" id="startBtn">> Start</button>
                 <button class="btn" id="stopBtn" disabled>Stop</button>
             </div>
         </div>
@@ -632,7 +552,6 @@
         const stopBtn = document.getElementById('stopBtn');
         const imageSelect = document.getElementById('imageSelect');
 
-        // Upload elements
         const tabBtns = document.querySelectorAll('.tab-btn');
         const selectTab = document.getElementById('selectTab');
         const uploadTab = document.getElementById('uploadTab');
@@ -645,7 +564,6 @@
 
         let ws = null;
         let isRunning = false;
-        let waitingForAction = false;
         let inputStep = 0;
         let currentCamera = null;
         let currentMovement = null;
@@ -654,14 +572,11 @@
         const CAMERA_KEYS = ['i', 'j', 'k', 'l', 'u'];
         const MOVEMENT_KEYS = ['w', 'a', 's', 'd', 'q'];
 
-        // Tab switching
         tabBtns.forEach(btn => {
             btn.addEventListener('click', () => {
                 tabBtns.forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-
-                const tab = btn.dataset.tab;
-                if (tab === 'select') {
+                if (btn.dataset.tab === 'select') {
                     selectTab.style.display = 'block';
                     uploadTab.classList.remove('active');
                 } else {
@@ -671,52 +586,27 @@
             });
         });
 
-        // File upload
         uploadBtn.addEventListener('click', () => fileInput.click());
-
         fileInput.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (file) handleImageUpload(file);
+            if (e.target.files[0]) handleImageUpload(e.target.files[0]);
         });
 
-        // Drag and drop on upload button
-        uploadBtn.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            uploadBtn.style.borderColor = 'var(--accent)';
-            uploadBtn.style.color = 'var(--accent)';
-        });
-
-        uploadBtn.addEventListener('dragleave', () => {
-            uploadBtn.style.borderColor = '';
-            uploadBtn.style.color = '';
-        });
-
+        uploadBtn.addEventListener('dragover', (e) => { e.preventDefault(); uploadBtn.style.borderColor = 'var(--accent)'; });
+        uploadBtn.addEventListener('dragleave', () => { uploadBtn.style.borderColor = ''; });
         uploadBtn.addEventListener('drop', (e) => {
             e.preventDefault();
             uploadBtn.style.borderColor = '';
-            uploadBtn.style.color = '';
-            const file = e.dataTransfer.files[0];
-            if (file && file.type.startsWith('image/')) {
-                handleImageUpload(file);
-            }
+            if (e.dataTransfer.files[0]?.type.startsWith('image/')) handleImageUpload(e.dataTransfer.files[0]);
         });
 
-        // Paste handling
         document.addEventListener('paste', (e) => {
-            const items = e.clipboardData?.items;
-            if (!items) return;
-
-            for (const item of items) {
+            for (const item of e.clipboardData?.items || []) {
                 if (item.type.startsWith('image/')) {
-                    const file = item.getAsFile();
-                    if (file) {
-                        // Switch to upload tab
-                        tabBtns.forEach(b => b.classList.remove('active'));
-                        document.querySelector('[data-tab="upload"]').classList.add('active');
-                        selectTab.style.display = 'none';
-                        uploadTab.classList.add('active');
-                        handleImageUpload(file);
-                    }
+                    tabBtns.forEach(b => b.classList.remove('active'));
+                    document.querySelector('[data-tab="upload"]').classList.add('active');
+                    selectTab.style.display = 'none';
+                    uploadTab.classList.add('active');
+                    handleImageUpload(item.getAsFile());
                     break;
                 }
             }
@@ -736,31 +626,24 @@
 
         removeUpload.addEventListener('click', () => {
             uploadedImageData = null;
-            previewImg.src = '';
             fileInput.value = '';
             uploadPreview.classList.remove('active');
             uploadBtn.style.display = '';
         });
 
-        // Load available images (only universal)
         async function loadImages() {
             try {
-                const response = await fetch('/api/images');
-                const data = await response.json();
-
-                // Filter to only universal images
-                const universalImages = data.images.filter(img => img.includes('universal'));
-
+                const res = await fetch('/api/images');
+                const data = await res.json();
+                const images = data.images.filter(img => img.includes('universal'));
                 imageSelect.innerHTML = '';
-                universalImages.sort().forEach(img => {
-                    const option = document.createElement('option');
-                    option.value = img;
-                    option.textContent = img.split('/').pop();
-                    imageSelect.appendChild(option);
+                images.sort().forEach(img => {
+                    const opt = document.createElement('option');
+                    opt.value = img;
+                    opt.textContent = img.split('/').pop();
+                    imageSelect.appendChild(opt);
                 });
-            } catch (e) {
-                console.error('Failed to load images:', e);
-            }
+            } catch (e) { console.error(e); }
         }
 
         function setStatus(text, state = '') {
@@ -770,10 +653,8 @@
 
         function resetInputState() {
             inputStep = 0;
-            currentCamera = null;
-            currentMovement = null;
-            cameraValue.textContent = '-';
-            moveValue.textContent = '-';
+            currentCamera = currentMovement = null;
+            cameraValue.textContent = moveValue.textContent = '-';
             step1.classList.remove('active', 'complete');
             step2.classList.remove('active', 'complete');
             updateKeyStates();
@@ -781,224 +662,125 @@
 
         function startInputSequence() {
             inputStep = 1;
-            currentCamera = null;
-            currentMovement = null;
-            cameraValue.textContent = '-';
-            moveValue.textContent = '-';
+            currentCamera = currentMovement = null;
+            cameraValue.textContent = moveValue.textContent = '-';
             step1.classList.add('active');
             step1.classList.remove('complete');
             step2.classList.remove('active', 'complete');
-            inputDisplay.textContent = 'Press camera key (I/J/K/L/U)...';
+            inputDisplay.textContent = '> press camera key (I/J/K/L/U)...';
             updateKeyStates();
         }
 
         function updateKeyStates() {
-            const cameraKeys = cameraSection.querySelectorAll('.key:not(.empty)');
-            const moveKeys = movementSection.querySelectorAll('.key:not(.empty)');
-
-            cameraKeys.forEach(key => {
-                key.classList.toggle('disabled', inputStep !== 1);
-                key.classList.remove('active');
+            cameraSection.querySelectorAll('.key:not(.empty)').forEach(k => {
+                k.classList.toggle('disabled', inputStep !== 1);
+                k.classList.remove('active');
             });
-
-            moveKeys.forEach(key => {
-                key.classList.toggle('disabled', inputStep !== 2);
-                key.classList.remove('active');
+            movementSection.querySelectorAll('.key:not(.empty)').forEach(k => {
+                k.classList.toggle('disabled', inputStep !== 2);
+                k.classList.remove('active');
             });
         }
 
         function handleCameraInput(key) {
             if (inputStep !== 1) return;
-
             currentCamera = key;
             cameraValue.textContent = key.toUpperCase();
-            step1.classList.remove('active');
-            step1.classList.add('complete');
-
+            step1.classList.replace('active', 'complete');
             inputStep = 2;
             step2.classList.add('active');
-            inputDisplay.textContent = 'Press movement key (W/A/S/D/Q)...';
+            inputDisplay.textContent = '> press movement key (W/A/S/D/Q)...';
             updateKeyStates();
             highlightKey(key, 'camera');
         }
 
         function handleMovementInput(key) {
             if (inputStep !== 2) return;
-
             currentMovement = key;
             moveValue.textContent = key.toUpperCase();
-            step2.classList.remove('active');
-            step2.classList.add('complete');
+            step2.classList.replace('active', 'complete');
             inputStep = 0;
             updateKeyStates();
             highlightKey(key, 'movement');
-
-            inputDisplay.textContent = `Sent: ${currentCamera.toUpperCase()} + ${currentMovement.toUpperCase()}`;
+            inputDisplay.textContent = `> sent: ${currentCamera.toUpperCase()} + ${currentMovement.toUpperCase()}`;
             sendAction();
         }
 
         function highlightKey(key, type) {
-            const keyEl = document.querySelector(`.key[data-key="${key}"][data-type="${type}"]`);
-            if (keyEl) {
-                keyEl.classList.add('active');
-                setTimeout(() => keyEl.classList.remove('active'), 200);
-            }
+            const el = document.querySelector(`.key[data-key="${key}"][data-type="${type}"]`);
+            if (el) { el.classList.add('active'); setTimeout(() => el.classList.remove('active'), 200); }
         }
 
         function sendAction() {
-            if (ws && ws.readyState === WebSocket.OPEN && currentCamera && currentMovement) {
-                ws.send(JSON.stringify({
-                    type: 'action',
-                    keyboard: currentMovement,
-                    mouse: currentCamera
-                }));
-                waitingForAction = false;
+            if (ws?.readyState === WebSocket.OPEN && currentCamera && currentMovement) {
+                ws.send(JSON.stringify({ type: 'action', keyboard: currentMovement, mouse: currentCamera }));
                 setStatus('Processing...', 'waiting');
             }
         }
 
         function connect() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
-
-            ws.onopen = () => {
-                setStatus('Connected', 'connected');
-                startBtn.disabled = false;
-            };
-
-            ws.onclose = () => {
-                setStatus('Disconnected', 'error');
-                startBtn.disabled = true;
-                stopBtn.disabled = true;
-                isRunning = false;
-                setTimeout(connect, 2000);
-            };
-
-            ws.onerror = () => {
-                setStatus('Connection error', 'error');
-            };
-
-            ws.onmessage = (event) => {
-                const msg = JSON.parse(event.data);
-                handleMessage(msg);
-            };
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${location.host}/ws`);
+            ws.onopen = () => { setStatus('Connected', 'connected'); startBtn.disabled = false; };
+            ws.onclose = () => { setStatus('Disconnected', 'error'); startBtn.disabled = stopBtn.disabled = true; isRunning = false; setTimeout(connect, 2000); };
+            ws.onerror = () => setStatus('Error', 'error');
+            ws.onmessage = (e) => handleMessage(JSON.parse(e.data));
         }
 
         function handleMessage(msg) {
             switch (msg.type) {
-                case 'frame':
-                    displayFrame(msg.data);
-                    blockNum.textContent = msg.block;
-                    break;
-
-                case 'ready':
-                    setStatus('Ready', 'waiting');
-                    break;
-
-                case 'request_action':
-                    waitingForAction = true;
-                    setStatus(`Block ${msg.block}`, 'waiting');
-                    startInputSequence();
-                    break;
-
-                case 'block_complete':
-                    setStatus(`Block ${msg.block} done`, 'connected');
-                    resetInputState();
-                    break;
-
-                case 'complete':
-                    setStatus('Complete', 'connected');
-                    isRunning = false;
-                    waitingForAction = false;
-                    startBtn.disabled = false;
-                    stopBtn.disabled = true;
-                    resetInputState();
-                    inputDisplay.textContent = 'Generation complete';
-                    break;
-
-                case 'stopped':
-                    setStatus('Stopped', 'connected');
-                    isRunning = false;
-                    waitingForAction = false;
-                    startBtn.disabled = false;
-                    stopBtn.disabled = true;
-                    resetInputState();
-                    inputDisplay.textContent = 'Stopped';
-                    break;
-
+                case 'frame': displayFrame(msg.data); blockNum.textContent = msg.block; break;
+                case 'ready': setStatus('Ready', 'waiting'); break;
+                case 'request_action': setStatus(`Block ${msg.block}`, 'waiting'); startInputSequence(); break;
+                case 'block_complete': setStatus(`Block ${msg.block} done`, 'connected'); resetInputState(); break;
+                case 'complete': case 'stopped':
+                    setStatus(msg.type === 'complete' ? 'Complete' : 'Stopped', 'connected');
+                    isRunning = false; startBtn.disabled = false; stopBtn.disabled = true;
+                    resetInputState(); inputDisplay.textContent = `> ${msg.type}`; break;
                 case 'error':
-                    setStatus('Error', 'error');
-                    isRunning = false;
-                    waitingForAction = false;
-                    startBtn.disabled = false;
-                    stopBtn.disabled = true;
-                    resetInputState();
-                    break;
+                    setStatus('Error', 'error'); isRunning = false;
+                    startBtn.disabled = false; stopBtn.disabled = true; resetInputState(); break;
             }
         }
 
-        function displayFrame(base64Data) {
+        function displayFrame(b64) {
             const img = new Image();
-            img.onload = () => {
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            };
-            img.src = 'data:image/jpeg;base64,' + base64Data;
+            img.onload = () => ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            img.src = 'data:image/jpeg;base64,' + b64;
         }
 
-        // Keyboard handling
         document.addEventListener('keydown', (e) => {
-            const key = e.key.toLowerCase();
-
-            if (CAMERA_KEYS.includes(key)) {
-                handleCameraInput(key);
-            } else if (MOVEMENT_KEYS.includes(key)) {
-                handleMovementInput(key);
-            }
+            const k = e.key.toLowerCase();
+            if (CAMERA_KEYS.includes(k)) handleCameraInput(k);
+            else if (MOVEMENT_KEYS.includes(k)) handleMovementInput(k);
         });
 
-        // Click handling for on-screen keys
         document.querySelectorAll('.key').forEach(el => {
             el.addEventListener('click', () => {
-                const key = el.dataset.key;
-                const type = el.dataset.type;
-                if (!key || el.classList.contains('disabled')) return;
-
-                if (type === 'camera') {
-                    handleCameraInput(key);
-                } else if (type === 'movement') {
-                    handleMovementInput(key);
-                }
+                if (el.classList.contains('disabled')) return;
+                const { key, type } = el.dataset;
+                if (type === 'camera') handleCameraInput(key);
+                else if (type === 'movement') handleMovementInput(key);
             });
         });
 
         startBtn.addEventListener('click', () => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                isRunning = true;
-                startBtn.disabled = true;
-                stopBtn.disabled = false;
-                resetInputState();
-                inputDisplay.textContent = 'Starting...';
-
-                const isUploadMode = document.querySelector('[data-tab="upload"]').classList.contains('active');
-
-                const payload = {
-                    type: 'start',
-                    image: isUploadMode && uploadedImageData ? uploadedImageData : imageSelect.value
-                };
-
-                ws.send(JSON.stringify(payload));
+            if (ws?.readyState === WebSocket.OPEN) {
+                isRunning = true; startBtn.disabled = true; stopBtn.disabled = false;
+                resetInputState(); inputDisplay.textContent = '> starting...';
+                const isUpload = document.querySelector('[data-tab="upload"]').classList.contains('active');
+                ws.send(JSON.stringify({ type: 'start', image: isUpload && uploadedImageData ? uploadedImageData : imageSelect.value }));
                 setStatus('Starting...', 'waiting');
             }
         });
 
         stopBtn.addEventListener('click', () => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
+            if (ws?.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'stop' }));
                 setStatus('Stopping...', 'waiting');
             }
         });
 
-        // Initialize
         loadImages();
         connect();
         resetInputState();
