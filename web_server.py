@@ -207,7 +207,7 @@ class InferenceEngine:
             result["mouse"] = mouse_cond
         return result
 
-    async def run_inference(self, img_path: str, websocket: WebSocket):
+    async def run_inference(self, img_input: str, websocket: WebSocket):
         """Run inference loop with WebSocket streaming."""
         self.is_running = True
         self.should_stop = False
@@ -220,8 +220,15 @@ class InferenceEngine:
                 break
 
         try:
-            # Load and process image
-            image = load_image(img_path)
+            # Load and process image (supports file path or base64 data)
+            if img_input.startswith('data:image'):
+                # Handle base64 uploaded image
+                header, b64_data = img_input.split(',', 1)
+                img_bytes = base64.b64decode(b64_data)
+                image = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+            else:
+                # Handle file path
+                image = load_image(img_input)
             image = self._resizecrop(image, 352, 640)
 
             image_tensor = self.frame_process(image)[None, :, None, :, :].to(
