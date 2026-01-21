@@ -218,6 +218,18 @@
             font-size: 10px;
             cursor: pointer;
             outline: none;
+            color-scheme: dark;
+        }
+
+        .image-select-wrapper select option {
+            background: #1a1a1a;
+            color: var(--text);
+            padding: 8px;
+        }
+
+        .image-select-wrapper select option:checked {
+            background: var(--accent);
+            color: var(--bg);
         }
 
         .upload-inline {
@@ -294,7 +306,7 @@
 
         .section-title {
             font-size: 9px;
-            color: var(--text-dim);
+            color: #777;
             text-transform: uppercase;
             letter-spacing: 0.1em;
             margin-bottom: 8px;
@@ -302,6 +314,12 @@
 
         .section-title span {
             color: var(--accent);
+        }
+
+        .section-title.sub {
+            font-size: 8px;
+            color: #666;
+            margin-bottom: 6px;
         }
 
         /* Key controls */
@@ -319,22 +337,24 @@
 
         .key {
             aspect-ratio: 1;
-            background: var(--bg);
-            border: 1px solid var(--border);
+            background: #151515;
+            border: 1px solid #333;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            font-size: 11px;
-            color: var(--text-dim);
+            font-size: 12px;
+            font-weight: 500;
+            color: #999;
             cursor: pointer;
             transition: all 0.1s;
-            gap: 1px;
+            gap: 2px;
         }
 
         .key:hover:not(.disabled):not(.empty) {
-            border-color: var(--border-light);
+            border-color: #555;
             color: var(--text);
+            background: #1a1a1a;
         }
 
         .key.active {
@@ -344,15 +364,17 @@
         }
 
         .key.empty { visibility: hidden; }
-        .key.disabled { opacity: 0.2; pointer-events: none; }
+        .key.disabled { opacity: 0.35; pointer-events: none; }
 
         .key-hint {
-            font-size: 6px;
-            color: var(--text-muted);
+            font-size: 7px;
+            color: #666;
             text-transform: uppercase;
+            letter-spacing: 0.05em;
         }
 
         .key.active .key-hint { color: var(--bg); }
+        .key:hover:not(.disabled) .key-hint { color: #888; }
 
         /* Sequence display */
         .sequence-display {
@@ -481,7 +503,7 @@
                 <div class="section-title"><span>></span> Controls</div>
                 <div class="controls-grid">
                     <div>
-                        <div class="section-title">Camera</div>
+                        <div class="section-title sub">Camera</div>
                         <div class="key-grid" id="cameraSection">
                             <div class="key empty"></div>
                             <div class="key" data-key="i" data-type="camera"><span>I</span><span class="key-hint">up</span></div>
@@ -495,7 +517,7 @@
                         </div>
                     </div>
                     <div>
-                        <div class="section-title">Movement</div>
+                        <div class="section-title sub">Movement</div>
                         <div class="key-grid" id="movementSection">
                             <div class="key empty"></div>
                             <div class="key" data-key="w" data-type="movement"><span>W</span><span class="key-hint">fwd</span></div>
