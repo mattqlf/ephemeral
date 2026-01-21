@@ -162,27 +162,47 @@ class InferenceEngine:
 
         num_frame_per_block = self.pipeline.num_frame_per_block
 
-        # Dummy inputs matching real inference shapes
+        # First, get actual shapes by creating a minimal real example
+        # This ensures we match exactly what the model expects
+        print("  Detecting tensor shapes from model...")
+
+        # Create a small test image to get visual_context shape
+        test_image = torch.randn([1, 3, 1, 352, 640], device=self.device, dtype=self.weight_dtype)
+        with torch.no_grad():
+            visual_context_shape = self.vae.clip.encode_video(test_image).shape
+        print(f"    visual_context shape: {visual_context_shape}")
+
+        # Shapes from cond_current() for block 0:
+        # cond_concat: [1, 20, num_frame_per_block, 44, 80]
+        # keyboard_cond: [1, 1 + 4*(num_frame_per_block-1), 4]
+        # mouse_cond: [1, 1 + 4*(num_frame_per_block-1), 2]
+        action_seq_len = 1 + 4 * (num_frame_per_block - 1)
+
         dummy_noise = torch.randn(
             [1, 16, num_frame_per_block, 44, 80],
             device=self.device, dtype=self.weight_dtype
         )
         dummy_cond_concat = torch.randn(
-            [1, 20, 15, 44, 80],
+            [1, 20, num_frame_per_block, 44, 80],
             device=self.device, dtype=self.weight_dtype
         )
         dummy_visual_context = torch.randn(
-            [1, 512],
+            visual_context_shape,
             device=self.device, dtype=self.weight_dtype
         )
         dummy_keyboard = torch.zeros(
-            [1, 57, 4],
+            [1, action_seq_len, 4],
             device=self.device, dtype=self.weight_dtype
         )
         dummy_mouse = torch.zeros(
-            [1, 57, 2],
+            [1, action_seq_len, 2],
             device=self.device, dtype=self.weight_dtype
         )
+
+        print(f"    noise shape: {dummy_noise.shape}")
+        print(f"    cond_concat shape: {dummy_cond_concat.shape}")
+        print(f"    keyboard_cond shape: {dummy_keyboard.shape}")
+        print(f"    mouse_cond shape: {dummy_mouse.shape}")
 
         conditional_dict = {
             "cond_concat": dummy_cond_concat,
