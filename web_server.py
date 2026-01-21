@@ -425,6 +425,18 @@ async def get_index():
     return FileResponse("web_ui/index.html")
 
 
+@app.get("/app.html", response_class=HTMLResponse)
+async def get_app():
+    """Serve the app page."""
+    return FileResponse("web_ui/app.html")
+
+
+@app.get("/assets/{filename}")
+async def get_asset(filename: str):
+    """Serve static assets from web_ui/assets/."""
+    return FileResponse(f"web_ui/assets/{filename}")
+
+
 @app.get("/api/status")
 async def get_status():
     """Get server status."""
