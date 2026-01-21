@@ -1,33 +1,19 @@
 <p align="center">
-<h1 align="center">Matrix-Game 2.0</h1>
-<h3 align="center">An Open-Source, Real-Time, and Streaming Interactive World Model</h3>
+<h1 align="center">Ephemeral</h1>
+<h3 align="center">Real-Time Interactive World Generation</h3>
 </p>
 
-<div align='center'>
+> *ephemeral* /ɪˈfem(ə)rəl/ — lasting for a very short time; transient, momentary, fleeting.
 
-[[HuggingFace](https://huggingface.co/Skywork/Matrix-Game-2.0)] [[Technical Report](https://matrix-game-v2.github.io/static/pdf/report.pdf)] [[arXiv](https://arxiv.org/abs/2508.13009)] [[Project Website](https://matrix-game-v2.github.io/)]
-
-</div>
-
-https://github.com/user-attachments/assets/336b0d4a-64f5-4e5c-9b60-6212ddb261c0
+Worlds that never were and never will be again. Each moment rendered from thought and gone before you blink.
 
 ## Overview
 
-**Matrix-Game-2.0** is an interactive world foundation model for real-time long video generation. Built upon an auto-regressive diffusion-based image-to-world framework, it generates real-time (25fps) long videos conditioned on keyboard and mouse inputs.
-
-**Related Project**: [Matrix-3D](https://github.com/SkyworkAI/Matrix-3D) for explorable 3D scenes.
-
-## Models
-
-| Model | Description | Config | Checkpoint |
-|-------|-------------|--------|------------|
-| Universal | General scenes | `inference_universal.yaml` | `base_distilled_model/base_distill.safetensors` |
-| GTA Drive | Driving scenes | `inference_gta_drive.yaml` | `gta_distilled_model/gta_keyboard2dim.safetensors` |
-| Temple Run | Temple Run game | `inference_templerun.yaml` | `templerun_distilled_model/templerun_7dim_onlykey.safetensors` |
+**Ephemeral** generates real-time (25fps) interactive video from a single image. Control the camera and movement with keyboard inputs to explore AI-generated worlds.
 
 ## Requirements
 
-- NVIDIA GPU with 24GB+ VRAM (A100, H100 tested)
+- NVIDIA GPU with 24GB+ VRAM (A100, B200 recommended)
 - Linux
 - 64GB RAM
 
@@ -41,25 +27,42 @@ cd Matrix-Game
 bash scripts/setup_runpod.sh
 ```
 
-## Usage
+## Quick Start
 
-### Web UI (Recommended for Cloud GPUs)
-
-Launch an interactive web interface with real-time video streaming:
+Launch the web UI:
 
 ```bash
 uv run python web_server.py \
     --config_path configs/inference_yaml/inference_universal.yaml \
     --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
-    --pretrained_model_path Matrix-Game-2.0
+    --pretrained_model_path Matrix-Game-2.0 \
+    --port 8888 \
+    --fast
 ```
 
-Then open `http://<your-server-ip>:8080` in your browser. The web UI provides:
-- Real-time video frame streaming via WebSocket
-- On-screen keyboard controls
-- Visual feedback for inputs
+Then open `http://<your-server-ip>:8888` in your browser.
 
-### CLI Interactive Streaming
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--fast` | Use 2 denoising steps instead of 3 (~33% faster, slight quality reduction) |
+| `--port` | Server port (default: 8080) |
+
+### Controls
+
+| Key | Action |
+|-----|--------|
+| W/A/S/D | Move forward/left/back/right |
+| Q | No movement |
+| I/J/K/L | Camera up/left/down/right |
+| U | No camera movement |
+
+Press any movement key to move (camera defaults to neutral). Press any camera key to look (movement defaults to neutral).
+
+## CLI Usage
+
+For terminal-based interaction:
 
 ```bash
 uv run python inference_streaming.py \
@@ -68,36 +71,30 @@ uv run python inference_streaming.py \
     --pretrained_model_path Matrix-Game-2.0
 ```
 
-The script will prompt for the image path and actions interactively.
+## Performance
 
-**Controls:**
-- **Universal/GTA**: Camera (I/K/J/L/U) + Movement (W/S/A/D/Q)
-- **Temple Run**: W=jump, S=slide, A/D=sidestep, Z/C=turn, Q=none
-
-### Batch Inference
-
-```bash
-uv run python inference.py \
-    --config_path configs/inference_yaml/inference_universal.yaml \
-    --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
-    --pretrained_model_path Matrix-Game-2.0 \
-    --output_folder outputs \
-    --num_output_frames 150
-```
+| Hardware | Time per block | Effective FPS |
+|----------|----------------|---------------|
+| A100 80GB | ~2.2s | ~5-6 |
+| A100 + `--fast` | ~1.5s | ~8 |
+| B200 | ~0.8-1.0s | ~12-15 |
+| B200 + `--fast` | ~0.5-0.7s | ~17-20 |
 
 ## Tips
 
-- Upward camera movement may cause brief glitches. Adjust direction to resolve.
-
-## Acknowledgements
-
-[Diffusers](https://github.com/huggingface/diffusers) | [SkyReels-V2](https://github.com/SkyworkAI/SkyReels-V2) | [Self-Forcing](https://github.com/guandeh17/Self-Forcing) | [GameFactory](https://github.com/KwaiVGI/GameFactory) | [MineRL](https://github.com/minerllabs/minerl) | [Video-Pre-Training](https://github.com/openai/Video-Pre-Training)
+- Keep the server running to avoid reloading models (~2-3 min startup)
+- Upward camera movement may cause brief glitches — adjust direction to resolve
+- The `--fast` flag is recommended for interactive use
 
 ## License
 
-MIT License - see [LICENSE](LICENSE).
+MIT License
 
-## Citation
+---
+
+## Credits
+
+Built on [Matrix-Game 2.0](https://github.com/SkyworkAI/Matrix-Game) by Skywork AI.
 
 ```bibtex
 @article{he2025matrix,
