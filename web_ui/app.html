@@ -665,10 +665,6 @@
             statusDot.className = 'status-dot ' + state;
         }
 
-        // Remember last inputs for "hold" behavior
-        let lastCamera = 'u';  // default: no camera movement
-        let lastMovement = 'q';  // default: no movement
-
         function resetInputState() {
             inputStep = 0;
             currentCamera = currentMovement = null;
@@ -684,7 +680,7 @@
             cameraValue.textContent = moveValue.textContent = '-';
             step1.classList.remove('complete');
             step2.classList.remove('active', 'complete');
-            inputDisplay.textContent = '> press any key (hold to repeat)...';
+            inputDisplay.textContent = '> press any key...';
             updateKeyStates();
         }
 
@@ -703,39 +699,37 @@
 
         function handleCameraInput(key) {
             if (inputStep !== 1) return;
-            // Camera key pressed: use this camera + last movement (or default Q)
+            // Camera key pressed: use this camera + Q (no movement)
             currentCamera = key;
-            currentMovement = lastMovement;
-            lastCamera = key;  // remember for next time
+            currentMovement = 'q';
 
             cameraValue.textContent = key.toUpperCase();
-            moveValue.textContent = currentMovement.toUpperCase();
+            moveValue.textContent = 'Q';
             step1.classList.add('complete');
             step2.classList.add('complete');
             inputStep = 0;
             updateKeyStates();
             highlightKey(key, 'camera');
-            highlightKey(currentMovement, 'movement');
-            inputDisplay.textContent = `> sent: ${currentCamera.toUpperCase()} + ${currentMovement.toUpperCase()}`;
+            highlightKey('q', 'movement');
+            inputDisplay.textContent = `> sent: ${key.toUpperCase()} + Q`;
             sendAction();
         }
 
         function handleMovementInput(key) {
             if (inputStep !== 1) return;
-            // Movement key pressed: use last camera (or default U) + this movement
-            currentCamera = lastCamera;
+            // Movement key pressed: use U (no camera) + this movement
+            currentCamera = 'u';
             currentMovement = key;
-            lastMovement = key;  // remember for next time
 
-            cameraValue.textContent = currentCamera.toUpperCase();
+            cameraValue.textContent = 'U';
             moveValue.textContent = key.toUpperCase();
             step1.classList.add('complete');
             step2.classList.add('complete');
             inputStep = 0;
             updateKeyStates();
-            highlightKey(currentCamera, 'camera');
+            highlightKey('u', 'camera');
             highlightKey(key, 'movement');
-            inputDisplay.textContent = `> sent: ${currentCamera.toUpperCase()} + ${currentMovement.toUpperCase()}`;
+            inputDisplay.textContent = `> sent: U + ${key.toUpperCase()}`;
             sendAction();
         }
 

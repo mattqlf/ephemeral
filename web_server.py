@@ -14,6 +14,10 @@ from queue import Queue, Empty
 from typing import Optional
 
 import torch
+import torch._dynamo
+
+# Increase dynamo cache size to prevent VAE cache thrashing
+torch._dynamo.config.cache_size_limit = 64
 import numpy as np
 from PIL import Image
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -66,6 +70,11 @@ class InferenceEngine:
     def _init_config(self):
         self.config = OmegaConf.load(self.args.config_path)
         self.mode = self.config.get('mode', 'universal')
+
+        # --fast flag: use 2 denoising steps instead of 3
+        if getattr(self.args, 'fast', False):
+            print("[fast mode] Using 2 denoising steps (was 3)")
+            self.config.denoising_step_list = [1000, 500]
 
     def _init_models(self):
         import concurrent.futures
@@ -563,6 +572,8 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--fast", action="store_true",
+                        help="Use 2 denoising steps instead of 3 for faster inference (~33%% speedup, slight quality loss)")
     return parser.parse_args()
 
 

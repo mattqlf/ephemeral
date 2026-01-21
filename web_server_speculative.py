@@ -33,6 +33,11 @@ import queue
 
 import numpy as np
 import torch
+import torch._dynamo
+
+# Increase dynamo cache size to prevent VAE cache thrashing
+torch._dynamo.config.cache_size_limit = 64
+
 from PIL import Image
 from einops import rearrange
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -608,6 +613,8 @@ def main():
     parser.add_argument("--port", type=int, default=8888)
     parser.add_argument("--max_blocks", type=int, default=None)
     parser.add_argument("--max_num_output_frames", type=int, default=15)
+    parser.add_argument("--fast", action="store_true",
+                        help="Use 2 denoising steps instead of 3 for faster inference")
 
     args = parser.parse_args()
 
@@ -616,6 +623,12 @@ def main():
         print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
 
     config = OmegaConf.load(args.config_path)
+
+    # --fast flag: use 2 denoising steps instead of 3
+    if args.fast:
+        print("[fast mode] Using 2 denoising steps (was 3)")
+        config.denoising_step_list = [1000, 500]
+
     set_seed(config.seed)
 
     engine = SpeculativeInferenceEngine(args, config)
