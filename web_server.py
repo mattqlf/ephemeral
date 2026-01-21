@@ -150,7 +150,78 @@ class InferenceEngine:
         self.vae = vae_encoder.to(self.device, self.weight_dtype)
 
         print("Models loaded successfully!")
+
+        # Warmup: trigger kernel compilation now instead of lazily
+        self._warmup()
+
         print("\n  TIP: Keep this server running to avoid reloading models.\n")
+
+    def _warmup(self):
+        """Run dummy forward passes to trigger torch.compile kernel compilation."""
+        print("Warming up (compiling kernels)...")
+
+        num_frame_per_block = self.pipeline.num_frame_per_block
+
+        # Dummy inputs matching real inference shapes
+        dummy_noise = torch.randn(
+            [1, 16, num_frame_per_block, 44, 80],
+            device=self.device, dtype=self.weight_dtype
+        )
+        dummy_cond_concat = torch.randn(
+            [1, 20, 15, 44, 80],
+            device=self.device, dtype=self.weight_dtype
+        )
+        dummy_visual_context = torch.randn(
+            [1, 512],
+            device=self.device, dtype=self.weight_dtype
+        )
+        dummy_keyboard = torch.zeros(
+            [1, 57, 4],
+            device=self.device, dtype=self.weight_dtype
+        )
+        dummy_mouse = torch.zeros(
+            [1, 57, 2],
+            device=self.device, dtype=self.weight_dtype
+        )
+
+        conditional_dict = {
+            "cond_concat": dummy_cond_concat,
+            "visual_context": dummy_visual_context,
+            "keyboard_cond": dummy_keyboard,
+            "mouse_cond": dummy_mouse,
+        }
+
+        # Initialize KV caches
+        self.pipeline._initialize_kv_cache(1, self.weight_dtype, self.device)
+        self.pipeline._initialize_kv_cache_mouse_and_keyboard(1, self.weight_dtype, self.device)
+        self.pipeline._initialize_crossattn_cache(1, self.weight_dtype, self.device)
+
+        timestep = torch.ones([1, num_frame_per_block], device=self.device, dtype=torch.int64) * 1000
+
+        with torch.no_grad():
+            # Warmup generator (triggers flex_attention compilation)
+            print("  Warming up generator...")
+            for i in range(2):  # Run twice to ensure all paths compiled
+                _, _ = self.pipeline.generator(
+                    noisy_image_or_video=dummy_noise,
+                    conditional_dict=conditional_dict,
+                    timestep=timestep,
+                    kv_cache=self.pipeline.kv_cache1,
+                    kv_cache_mouse=self.pipeline.kv_cache_mouse,
+                    kv_cache_keyboard=self.pipeline.kv_cache_keyboard,
+                    crossattn_cache=self.pipeline.crossattn_cache,
+                    current_start=0
+                )
+
+            # Warmup VAE decoder
+            print("  Warming up VAE decoder...")
+            dummy_latent = torch.randn([1, num_frame_per_block, 16, 44, 80], device=self.device, dtype=torch.float16)
+            vae_cache = [None] * 4
+            _, _ = self.pipeline.vae_decoder(dummy_latent, *vae_cache)
+
+        # Clear CUDA cache
+        torch.cuda.empty_cache()
+        print("  Warmup complete!")
 
     def _resizecrop(self, image, th, tw):
         w, h = image.size
