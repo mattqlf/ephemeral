@@ -140,15 +140,17 @@
 
         .video-container {
             flex: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
             background: #000;
             border: 1px solid var(--border);
             position: relative;
+            min-height: 0; /* Allow flex shrinking */
         }
 
         #videoCanvas {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
             max-width: 100%;
             max-height: 100%;
             image-rendering: pixelated;
@@ -802,6 +804,31 @@
                 setStatus('Stopping...', 'waiting');
             }
         });
+
+        // Resize canvas to fill container while maintaining aspect ratio
+        function resizeCanvas() {
+            const container = document.querySelector('.video-container');
+            const containerWidth = container.clientWidth;
+            const containerHeight = container.clientHeight;
+            const aspectRatio = 640 / 352;
+
+            let width, height;
+            if (containerWidth / containerHeight > aspectRatio) {
+                // Container is wider than video aspect ratio
+                height = containerHeight;
+                width = height * aspectRatio;
+            } else {
+                // Container is taller than video aspect ratio
+                width = containerWidth;
+                height = width / aspectRatio;
+            }
+
+            canvas.style.width = width + 'px';
+            canvas.style.height = height + 'px';
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
 
         loadImages();
         connect();
