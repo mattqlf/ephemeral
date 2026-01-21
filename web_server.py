@@ -157,88 +157,116 @@ class InferenceEngine:
         print("\n  TIP: Keep this server running to avoid reloading models.\n")
 
     def _warmup(self):
-        """Run dummy forward passes to trigger torch.compile kernel compilation."""
-        print("Warming up (compiling kernels)...")
+        """Run complete warmup simulating full inference to trigger all torch.compile paths."""
+        print("Warming up (compiling all kernels)...")
 
         num_frame_per_block = self.pipeline.num_frame_per_block
+        denoising_steps = self.pipeline.denoising_step_list
 
-        # First, get actual shapes by creating a minimal real example
-        # This ensures we match exactly what the model expects
-        print("  Detecting tensor shapes from model...")
-
-        # Create a small test image to get visual_context shape
+        # Get actual visual_context shape from model
+        print("  Detecting tensor shapes...")
         test_image = torch.randn([1, 3, 1, 352, 640], device=self.device, dtype=self.weight_dtype)
         with torch.no_grad():
             visual_context_shape = self.vae.clip.encode_video(test_image).shape
-        print(f"    visual_context shape: {visual_context_shape}")
+        print(f"    visual_context: {visual_context_shape}")
 
-        # Shapes from cond_current() for block 0:
-        # cond_concat: [1, 20, num_frame_per_block, 44, 80]
-        # keyboard_cond: [1, 1 + 4*(num_frame_per_block-1), 4]
-        # mouse_cond: [1, 1 + 4*(num_frame_per_block-1), 2]
-        action_seq_len = 1 + 4 * (num_frame_per_block - 1)
+        # Create full-size conditions (before cond_current slicing)
+        # These match what run_inference creates
+        max_output_frames = self.args.max_num_output_frames
+        num_frames = (max_output_frames - 1) * 4 + 1
 
-        dummy_noise = torch.randn(
-            [1, 16, num_frame_per_block, 44, 80],
+        full_cond_concat = torch.randn(
+            [1, 20, max_output_frames, 44, 80],
             device=self.device, dtype=self.weight_dtype
         )
-        dummy_cond_concat = torch.randn(
-            [1, 20, num_frame_per_block, 44, 80],
-            device=self.device, dtype=self.weight_dtype
-        )
-        dummy_visual_context = torch.randn(
+        full_visual_context = torch.randn(
             visual_context_shape,
             device=self.device, dtype=self.weight_dtype
         )
-        dummy_keyboard = torch.zeros(
-            [1, action_seq_len, 4],
+        full_keyboard = torch.zeros(
+            [1, num_frames, 4],
             device=self.device, dtype=self.weight_dtype
         )
-        dummy_mouse = torch.zeros(
-            [1, action_seq_len, 2],
+        full_mouse = torch.zeros(
+            [1, num_frames, 2],
+            device=self.device, dtype=self.weight_dtype
+        )
+        sampled_noise = torch.randn(
+            [1, 16, max_output_frames, 44, 80],
             device=self.device, dtype=self.weight_dtype
         )
 
-        print(f"    noise shape: {dummy_noise.shape}")
-        print(f"    cond_concat shape: {dummy_cond_concat.shape}")
-        print(f"    keyboard_cond shape: {dummy_keyboard.shape}")
-        print(f"    mouse_cond shape: {dummy_mouse.shape}")
-
-        conditional_dict = {
-            "cond_concat": dummy_cond_concat,
-            "visual_context": dummy_visual_context,
-            "keyboard_cond": dummy_keyboard,
-            "mouse_cond": dummy_mouse,
+        full_conditional_dict = {
+            "cond_concat": full_cond_concat,
+            "visual_context": full_visual_context,
+            "keyboard_cond": full_keyboard,
+            "mouse_cond": full_mouse,
         }
 
-        # Initialize KV caches
+        # Initialize all caches
         self.pipeline._initialize_kv_cache(1, self.weight_dtype, self.device)
         self.pipeline._initialize_kv_cache_mouse_and_keyboard(1, self.weight_dtype, self.device)
         self.pipeline._initialize_crossattn_cache(1, self.weight_dtype, self.device)
+        vae_cache = [None] * len(ZERO_VAE_CACHE)
 
-        timestep = torch.ones([1, num_frame_per_block], device=self.device, dtype=torch.int64) * 1000
+        # Simulate 2 full blocks to cover all code paths
+        print(f"  Simulating 2 blocks × {len(denoising_steps)} denoising steps...")
 
         with torch.no_grad():
-            # Warmup generator (triggers flex_attention compilation)
-            print("  Warming up generator...")
-            for i in range(2):  # Run twice to ensure all paths compiled
-                _, _ = self.pipeline.generator(
-                    noisy_image_or_video=dummy_noise,
-                    conditional_dict=conditional_dict,
-                    timestep=timestep,
-                    kv_cache=self.pipeline.kv_cache1,
-                    kv_cache_mouse=self.pipeline.kv_cache_mouse,
-                    kv_cache_keyboard=self.pipeline.kv_cache_keyboard,
-                    crossattn_cache=self.pipeline.crossattn_cache,
-                    current_start=0
+            for block_idx in range(2):
+                current_start_frame = block_idx * num_frame_per_block
+                print(f"    Block {block_idx} (current_start={current_start_frame})...")
+
+                # Slice conditions like cond_current() does
+                cond = cond_current(
+                    full_conditional_dict,
+                    current_start_frame,
+                    num_frame_per_block
                 )
 
-            # Warmup VAE decoder
-            print("  Warming up VAE decoder...")
-            dummy_latent = torch.randn([1, num_frame_per_block, 16, 44, 80], device=self.device, dtype=torch.float16)
-            # VAE cache must have same length as ZERO_VAE_CACHE (32 elements), all set to None for first call
-            vae_cache = [None] * len(ZERO_VAE_CACHE)
-            _, _ = self.pipeline.vae_decoder(dummy_latent, *vae_cache)
+                # Get noise slice for this block
+                noise_slice = sampled_noise[:, :, current_start_frame:current_start_frame + num_frame_per_block]
+                output = torch.zeros_like(noise_slice)
+
+                # Run all denoising steps
+                for step_idx, current_timestep in enumerate(denoising_steps):
+                    timestep = torch.ones([1, num_frame_per_block], device=self.device, dtype=torch.int64) * current_timestep
+
+                    if step_idx < len(denoising_steps) - 1:
+                        # Not last step: predict and blend
+                        next_timestep = denoising_steps[step_idx + 1]
+                        denoised_pred, new_cache = self.pipeline.generator(
+                            noisy_image_or_video=noise_slice,
+                            conditional_dict=cond,
+                            timestep=timestep,
+                            kv_cache=self.pipeline.kv_cache1,
+                            kv_cache_mouse=self.pipeline.kv_cache_mouse,
+                            kv_cache_keyboard=self.pipeline.kv_cache_keyboard,
+                            crossattn_cache=self.pipeline.crossattn_cache,
+                            current_start=current_start_frame
+                        )
+                        # Simulate noise blending (simplified)
+                        noise_slice = denoised_pred * 0.5 + noise_slice * 0.5
+                    else:
+                        # Last step: final prediction
+                        denoised_pred, new_cache = self.pipeline.generator(
+                            noisy_image_or_video=noise_slice,
+                            conditional_dict=cond,
+                            timestep=timestep,
+                            kv_cache=self.pipeline.kv_cache1,
+                            kv_cache_mouse=self.pipeline.kv_cache_mouse,
+                            kv_cache_keyboard=self.pipeline.kv_cache_keyboard,
+                            crossattn_cache=self.pipeline.crossattn_cache,
+                            current_start=current_start_frame
+                        )
+                        output = denoised_pred
+
+                # Update KV caches (triggers cache update paths)
+                self.pipeline._update_kv_cache(self.pipeline.kv_cache1, new_cache)
+
+                # VAE decode (with None cache first time, populated cache second time)
+                dummy_latent = output.transpose(1, 2)
+                _, vae_cache = self.pipeline.vae_decoder(dummy_latent.half(), *vae_cache)
 
         # Clear CUDA cache
         torch.cuda.empty_cache()
@@ -660,7 +688,7 @@ def parse_args():
     parser.add_argument("--checkpoint_path", type=str, required=True)
     parser.add_argument("--pretrained_model_path", type=str, default="Matrix-Game-2.0")
     parser.add_argument("--max_num_output_frames", type=int, default=360)
-    parser.add_argument("--max_blocks", type=int, default=50)
+    parser.add_argument("--max_blocks", type=int, default=999999)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
