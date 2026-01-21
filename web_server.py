@@ -223,13 +223,17 @@ class InferenceEngine:
             # Load and process image (supports file path or base64 data)
             if img_input.startswith('data:image'):
                 # Handle base64 uploaded image
+                print(f"Processing uploaded image ({len(img_input) // 1024}KB base64)...")
                 header, b64_data = img_input.split(',', 1)
                 img_bytes = base64.b64decode(b64_data)
                 image = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+                print(f"  Image size: {image.size}")
             else:
                 # Handle file path
+                print(f"Loading image from: {img_input}")
                 image = load_image(img_input)
             image = self._resizecrop(image, 352, 640)
+            print(f"  Resized to: {image.size}")
 
             image_tensor = self.frame_process(image)[None, :, None, :, :].to(
                 dtype=self.weight_dtype, device=self.device)
@@ -510,10 +514,17 @@ async def websocket_endpoint(websocket: WebSocket):
             msg_type = data.get("type")
 
             if msg_type == "start":
-                img_path = data.get("image", "demo_images/universal/0000.png")
+                img_input = data.get("image", "demo_images/universal/0000.png")
                 if inference_engine and not inference_engine.is_running:
-                    asyncio.create_task(
-                        inference_engine.run_inference(img_path, websocket))
+                    try:
+                        asyncio.create_task(
+                            inference_engine.run_inference(img_input, websocket))
+                    except Exception as e:
+                        print(f"Failed to start inference: {e}")
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": f"Failed to start: {str(e)}"
+                        })
                 else:
                     await websocket.send_json({
                         "type": "error",
@@ -566,4 +577,9 @@ if __name__ == "__main__":
 
     # Start server
     print(f"Starting server at http://{args.host}:{args.port}")
-    uvicorn.run(app, host=args.host, port=args.port)
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        ws_max_size=50 * 1024 * 1024  # 50MB max WebSocket message (for large image uploads)
+    )
