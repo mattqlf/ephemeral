@@ -261,8 +261,18 @@ class InferenceEngine:
                         )
                         output = denoised_pred
 
-                # Update KV caches (triggers cache update paths)
-                self.pipeline._update_kv_cache(self.pipeline.kv_cache1, new_cache)
+                # Final pass with context_noise timestep to update KV cache (like real inference)
+                context_timestep = torch.ones([1, num_frame_per_block], device=self.device, dtype=torch.int64) * self.pipeline.args.context_noise
+                self.pipeline.generator(
+                    noisy_image_or_video=output,
+                    conditional_dict=cond,
+                    timestep=context_timestep,
+                    kv_cache=self.pipeline.kv_cache1,
+                    kv_cache_mouse=self.pipeline.kv_cache_mouse,
+                    kv_cache_keyboard=self.pipeline.kv_cache_keyboard,
+                    crossattn_cache=self.pipeline.crossattn_cache,
+                    current_start=current_start_frame
+                )
 
                 # VAE decode (with None cache first time, populated cache second time)
                 dummy_latent = output.transpose(1, 2)
