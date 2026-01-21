@@ -39,19 +39,9 @@
             image-rendering: pixelated;
         }
 
-        /* Scanline effect */
+        /* Scanline effect - disabled */
         .bg-scanlines {
-            position: fixed;
-            inset: 0;
-            background: repeating-linear-gradient(
-                0deg,
-                transparent,
-                transparent 2px,
-                rgba(0, 0, 0, 0.1) 2px,
-                rgba(0, 0, 0, 0.1) 4px
-            );
-            pointer-events: none;
-            z-index: 1000;
+            display: none;
         }
 
         .app {
@@ -549,7 +539,7 @@
             </div>
 
             <div class="hint-text">
-                Press <code>camera</code> then <code>movement</code>. Auto-sends after both.
+                Press any key to send. Hold to repeat action.
             </div>
 
             <div class="action-buttons">
@@ -675,6 +665,10 @@
             statusDot.className = 'status-dot ' + state;
         }
 
+        // Remember last inputs for "hold" behavior
+        let lastCamera = 'u';  // default: no camera movement
+        let lastMovement = 'q';  // default: no movement
+
         function resetInputState() {
             inputStep = 0;
             currentCamera = currentMovement = null;
@@ -685,46 +679,61 @@
         }
 
         function startInputSequence() {
-            inputStep = 1;
+            inputStep = 1;  // 1 = waiting for any input
             currentCamera = currentMovement = null;
             cameraValue.textContent = moveValue.textContent = '-';
-            step1.classList.add('active');
             step1.classList.remove('complete');
             step2.classList.remove('active', 'complete');
-            inputDisplay.textContent = '> press camera key (I/J/K/L/U)...';
+            inputDisplay.textContent = '> press any key (hold to repeat)...';
             updateKeyStates();
         }
 
         function updateKeyStates() {
+            // Enable all keys when waiting for input
+            const enabled = inputStep === 1;
             cameraSection.querySelectorAll('.key:not(.empty)').forEach(k => {
-                k.classList.toggle('disabled', inputStep !== 1);
+                k.classList.toggle('disabled', !enabled);
                 k.classList.remove('active');
             });
             movementSection.querySelectorAll('.key:not(.empty)').forEach(k => {
-                k.classList.toggle('disabled', inputStep !== 2);
+                k.classList.toggle('disabled', !enabled);
                 k.classList.remove('active');
             });
         }
 
         function handleCameraInput(key) {
             if (inputStep !== 1) return;
+            // Camera key pressed: use this camera + last movement (or default Q)
             currentCamera = key;
+            currentMovement = lastMovement;
+            lastCamera = key;  // remember for next time
+
             cameraValue.textContent = key.toUpperCase();
-            step1.classList.replace('active', 'complete');
-            inputStep = 2;
-            step2.classList.add('active');
-            inputDisplay.textContent = '> press movement key (W/A/S/D/Q)...';
+            moveValue.textContent = currentMovement.toUpperCase();
+            step1.classList.add('complete');
+            step2.classList.add('complete');
+            inputStep = 0;
             updateKeyStates();
             highlightKey(key, 'camera');
+            highlightKey(currentMovement, 'movement');
+            inputDisplay.textContent = `> sent: ${currentCamera.toUpperCase()} + ${currentMovement.toUpperCase()}`;
+            sendAction();
         }
 
         function handleMovementInput(key) {
-            if (inputStep !== 2) return;
+            if (inputStep !== 1) return;
+            // Movement key pressed: use last camera (or default U) + this movement
+            currentCamera = lastCamera;
             currentMovement = key;
+            lastMovement = key;  // remember for next time
+
+            cameraValue.textContent = currentCamera.toUpperCase();
             moveValue.textContent = key.toUpperCase();
-            step2.classList.replace('active', 'complete');
+            step1.classList.add('complete');
+            step2.classList.add('complete');
             inputStep = 0;
             updateKeyStates();
+            highlightKey(currentCamera, 'camera');
             highlightKey(key, 'movement');
             inputDisplay.textContent = `> sent: ${currentCamera.toUpperCase()} + ${currentMovement.toUpperCase()}`;
             sendAction();

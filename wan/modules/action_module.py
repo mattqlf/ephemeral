@@ -16,8 +16,10 @@ except:
 
 
 DISABLE_COMPILE = False  # get os env
+print("[compile] Compiling flex_attention in action_module.py...")
 flex_attention = torch.compile(
     flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
+print("[compile] flex_attention (action_module) compiled.")
     
 
 class WanRMSNorm(nn.Module):

@@ -21,8 +21,10 @@ from .action_module import ActionModule
 
 # wan 1.3B model has a weird channel / head configurations and require max-autotune to work with flexattention
 # see https://github.com/pytorch/pytorch/issues/133254
+print("[compile] Compiling flex_attention in causal_model.py...")
 flex_attention = torch.compile(
     flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
+print("[compile] flex_attention (causal_model) compiled.")
 
 
 def causal_rope_apply(x, grid_sizes, freqs, start_frame=0):
