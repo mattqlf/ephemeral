@@ -142,12 +142,12 @@ class TPCausalWanSelfAttention(nn.Module):
         self.max_attention_size = 15 * 1 * 880 if local_attn_size == -1 else local_attn_size * 880
 
         # Column-parallel Q, K, V (each rank gets a subset of heads)
-        self.q = ColumnParallelLinear(dim, dim, bias=False, gather_output=False)
-        self.k = ColumnParallelLinear(dim, dim, bias=False, gather_output=False)
-        self.v = ColumnParallelLinear(dim, dim, bias=False, gather_output=False)
+        self.q = ColumnParallelLinear(dim, dim, bias=True, gather_output=False)
+        self.k = ColumnParallelLinear(dim, dim, bias=True, gather_output=False)
+        self.v = ColumnParallelLinear(dim, dim, bias=True, gather_output=False)
 
         # Row-parallel output projection (all-reduces result)
-        self.o = RowParallelLinear(dim, dim, bias=False, input_is_parallel=True)
+        self.o = RowParallelLinear(dim, dim, bias=True, input_is_parallel=True)
 
         # QK norms - applied per-head, so we use sharded version
         if qk_norm:
@@ -308,12 +308,12 @@ class TPWanI2VCrossAttention(nn.Module):
         self.eps = eps
 
         # Column-parallel Q, K, V
-        self.q = ColumnParallelLinear(dim, dim, bias=False, gather_output=False)
-        self.k = ColumnParallelLinear(dim, dim, bias=False, gather_output=False)
-        self.v = ColumnParallelLinear(dim, dim, bias=False, gather_output=False)
+        self.q = ColumnParallelLinear(dim, dim, bias=True, gather_output=False)
+        self.k = ColumnParallelLinear(dim, dim, bias=True, gather_output=False)
+        self.v = ColumnParallelLinear(dim, dim, bias=True, gather_output=False)
 
         # Row-parallel O
-        self.o = RowParallelLinear(dim, dim, bias=False, input_is_parallel=True)
+        self.o = RowParallelLinear(dim, dim, bias=True, input_is_parallel=True)
 
         # QK norms
         if qk_norm:
@@ -852,6 +852,10 @@ class TPCausalWanModel(ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdap
         tp_block.self_attn.q.weight.copy_(orig_block.self_attn.q.weight[dim_start:dim_end, :])
         tp_block.self_attn.k.weight.copy_(orig_block.self_attn.k.weight[dim_start:dim_end, :])
         tp_block.self_attn.v.weight.copy_(orig_block.self_attn.v.weight[dim_start:dim_end, :])
+        if orig_block.self_attn.q.bias is not None:
+            tp_block.self_attn.q.bias.copy_(orig_block.self_attn.q.bias[dim_start:dim_end])
+            tp_block.self_attn.k.bias.copy_(orig_block.self_attn.k.bias[dim_start:dim_end])
+            tp_block.self_attn.v.bias.copy_(orig_block.self_attn.v.bias[dim_start:dim_end])
 
         # Shard self-attention O (row-parallel: split input dim)
         tp_block.self_attn.o.weight.copy_(orig_block.self_attn.o.weight[:, dim_start:dim_end])
@@ -869,6 +873,10 @@ class TPCausalWanModel(ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdap
         tp_block.cross_attn.q.weight.copy_(orig_block.cross_attn.q.weight[dim_start:dim_end, :])
         tp_block.cross_attn.k.weight.copy_(orig_block.cross_attn.k.weight[dim_start:dim_end, :])
         tp_block.cross_attn.v.weight.copy_(orig_block.cross_attn.v.weight[dim_start:dim_end, :])
+        if orig_block.cross_attn.q.bias is not None:
+            tp_block.cross_attn.q.bias.copy_(orig_block.cross_attn.q.bias[dim_start:dim_end])
+            tp_block.cross_attn.k.bias.copy_(orig_block.cross_attn.k.bias[dim_start:dim_end])
+            tp_block.cross_attn.v.bias.copy_(orig_block.cross_attn.v.bias[dim_start:dim_end])
         tp_block.cross_attn.o.weight.copy_(orig_block.cross_attn.o.weight[:, dim_start:dim_end])
         if orig_block.cross_attn.o.bias is not None:
             tp_block.cross_attn.o.bias.copy_(orig_block.cross_attn.o.bias)
