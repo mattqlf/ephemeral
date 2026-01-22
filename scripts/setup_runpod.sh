@@ -127,6 +127,9 @@ if [[ "$USE_B200_CONFIG" == true ]] && [[ -n "$TORCH_VERSION" ]]; then
 
   echo "Installing setuptools (required for torch.compile)..."
   uv pip install setuptools
+
+  echo "Installing hf_transfer (for fast model downloads)..."
+  uv pip install hf_transfer
 else
   # Standard setup: create venv with Python 3.10
   echo "Creating virtual environment..."
@@ -140,6 +143,9 @@ else
 
   echo "Installing setuptools (required for torch.compile)..."
   uv pip install setuptools
+
+  echo "Installing hf_transfer (for fast model downloads)..."
+  uv pip install hf_transfer
 fi
 
 # Download model weights
