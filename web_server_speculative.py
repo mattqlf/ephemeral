@@ -199,9 +199,12 @@ class SpeculativeInferenceEngine:
         self.stop_speculation = Event()
 
         # Session state
-        self.action_queue = asyncio.Queue()
         self.is_running = False
         self.should_stop = False
+
+        # Continuous action tracking - always stores latest user input
+        self.current_action = {"keyboard": "q", "mouse": "u"}
+        self.action_lock = Lock()
 
         self._init_engines()
 
@@ -251,7 +254,10 @@ class SpeculativeInferenceEngine:
         self.speculation_thread.start()
 
         print("Speculative engines ready!")
-        self._warmup_engines()
+        if not getattr(self.args, 'no_warmup', False):
+            self._warmup_engines()
+        else:
+            print("Skipping warmup (--no-warmup). Kernels will compile on first inference.")
 
     def _create_engine(self, device: torch.device, decoder_state_dict: dict,
                        main_checkpoint: Optional[dict]) -> dict:
@@ -557,12 +563,9 @@ class SpeculativeInferenceEngine:
         self.is_running = True
         self.should_stop = False
 
-        # Clear queues
-        while not self.action_queue.empty():
-            try:
-                self.action_queue.get_nowait()
-            except:
-                break
+        # Reset action tracking and clear speculation state
+        with self.action_lock:
+            self.current_action = {"keyboard": "q", "mouse": "u"}
 
         while not self.speculation_task_queue.empty():
             try:
@@ -657,6 +660,16 @@ class SpeculativeInferenceEngine:
         finally:
             self.is_running = False
 
+    def _get_current_action(self) -> dict:
+        """Get the current action from continuous tracking."""
+        with self.action_lock:
+            return self.current_action.copy()
+
+    def _set_current_action(self, action: dict):
+        """Update the current action from user input."""
+        with self.action_lock:
+            self.current_action = action.copy()
+
     async def _speculative_inference_loop(
         self,
         engine: dict,
@@ -664,7 +677,15 @@ class SpeculativeInferenceEngine:
         conditional_dict: dict,
         websocket: WebSocket
     ):
-        """Main inference loop with speculative pipelining."""
+        """
+        Main inference loop with speculative pipelining.
+
+        Key improvements over naive approach:
+        1. Continuous action tracking - no blocking wait for user input
+        2. Early speculation - queue next block immediately after context pass
+        3. Speculation wait - wait for in-progress speculation up to small timeout
+        4. Pipelined frame sending - async frame transmission
+        """
         pipeline = engine["pipeline"]
         device = engine["device"]
 
@@ -682,9 +703,15 @@ class SpeculativeInferenceEngine:
         pipeline._initialize_crossattn_cache(batch_size, noise.dtype, noise.device)
 
         current_start_frame = 0
-        last_action = {"keyboard": "q", "mouse": "u"}
         speculation_hits = 0
         speculation_misses = 0
+
+        # Notify client to start streaming actions
+        await websocket.send_json({
+            "type": "start_streaming",
+            "mode": self.mode,
+            "message": "Hold keys to control. Actions are streamed continuously."
+        })
 
         for block_index in range(min(max_blocks, num_blocks)):
             if self.should_stop:
@@ -692,50 +719,45 @@ class SpeculativeInferenceEngine:
 
             block_start_time = time.time()
 
-            # Request action from user
-            await websocket.send_json({
-                "type": "request_action",
-                "block": block_index + 1,
-                "mode": self.mode
-            })
+            # Get current action (non-blocking - uses latest streamed input)
+            action = self._get_current_action()
 
-            # Wait for action
-            try:
-                action_data = await asyncio.wait_for(
-                    self.action_queue.get(),
-                    timeout=120.0
-                )
-                if action_data is None:
-                    break
-                action = {
-                    "keyboard": action_data.get("keyboard", "q"),
-                    "mouse": action_data.get("mouse", "u")
-                }
-            except asyncio.TimeoutError:
-                action = {"keyboard": "q", "mouse": "u"}
-
-            # Check if speculation matches
+            # Check if speculation is ready
             use_speculation = False
             spec_result = None
 
-            with self.speculation_lock:
-                if (self.speculative_result is not None and
-                    self.speculative_result.block_index == block_index + 1 and
-                    self.speculative_result.action == action and
-                    self.speculative_result.valid):
-                    use_speculation = True
-                    spec_result = self.speculative_result
-                    self.speculative_result = None
-                    speculation_hits += 1
+            # For block > 0, wait for speculation from previous iteration
+            if block_index > 0:
+                # Wait for speculation to complete (queued at end of previous block)
+                # Speculation takes ~1.5s, frame sending takes ~0.4s
+                # So we may need to wait ~1.1s more after frames are sent
+                if self.speculation_ready.wait(timeout=3.0):
+                    # Speculation completed - check if it matches
+                    with self.speculation_lock:
+                        if (self.speculative_result is not None and
+                            self.speculative_result.block_index == block_index + 1):
+                            # Check if action still matches (user might have changed input)
+                            current_action = self._get_current_action()
+                            if self.speculative_result.action == current_action:
+                                use_speculation = True
+                                spec_result = self.speculative_result
+                                action = current_action  # Use the matched action
+                                self.speculative_result = None
+                                speculation_hits += 1
+                            else:
+                                # Action changed - discard speculation
+                                self.speculative_result = None
+                else:
+                    print(f"[block {block_index + 1}] Speculation timeout")
 
             if use_speculation:
-                print(f"[block {block_index + 1}] SPECULATION HIT! Using pre-generated block")
+                print(f"[block {block_index + 1}] SPECULATION HIT! action={action}")
 
                 # Use speculative result
                 video_np = spec_result.frames
+                denoised_pred = spec_result.denoised_pred
 
                 # Sync state from speculative back to primary
-                # Transfer caches back to primary device
                 copy_kv_cache_inplace(
                     clone_kv_cache(spec_result.kv_cache1, device), pipeline.kv_cache1)
                 copy_kv_cache_inplace(
@@ -751,13 +773,16 @@ class SpeculativeInferenceEngine:
                 conditional_dict["mouse_cond"] = spec_result.conditional_dict["mouse_cond"].to(device)
 
                 output[:, :, current_start_frame:current_start_frame + num_frame_per_block] = \
-                    spec_result.denoised_pred.to(device)
+                    denoised_pred.to(device)
 
             else:
-                if self.speculative_result is not None:
-                    print(f"[block {block_index + 1}] SPECULATION MISS - expected {self.speculative_result.action}, got {action}")
+                # No speculation available or action changed
+                if block_index == 0:
+                    print(f"[block {block_index + 1}] Generating (first block)")
                 else:
-                    print(f"[block {block_index + 1}] No speculation available")
+                    print(f"[block {block_index + 1}] SPECULATION MISS - action changed or not ready")
+                    with self.speculation_lock:
+                        self.speculative_result = None
                 speculation_misses += 1
 
                 # Generate block on primary
@@ -826,41 +851,18 @@ class SpeculativeInferenceEngine:
                 video_np = rearrange(video, "B T C H W -> B T H W C")
                 video_np = ((video_np.float() + 1) * 127.5).clip(0, 255).cpu().numpy().astype(np.uint8)[0]
 
-            # Send frames to client
-            for frame_idx, frame in enumerate(video_np):
-                await websocket.send_json({
-                    "type": "frame",
-                    "data": self._frame_to_base64(frame),
-                    "block": block_index + 1,
-                    "frame": frame_idx
-                })
-                await asyncio.sleep(0.04)
-
-            current_start_frame += num_frame_per_block
-            last_action = action
-
-            block_time = time.time() - block_start_time
-            hit_rate = speculation_hits / (speculation_hits + speculation_misses) * 100 if (speculation_hits + speculation_misses) > 0 else 0
-
-            await websocket.send_json({
-                "type": "block_complete",
-                "block": block_index + 1,
-                "time": f"{block_time:.2f}s",
-                "speculation_hit": use_speculation,
-                "hit_rate": f"{hit_rate:.1f}%"
-            })
-
-            # Queue speculation for next block (assume same action)
+            # Queue speculation IMMEDIATELY after we have state (before sending frames)
+            # This maximizes time for speculation to complete
             if block_index + 1 < min(max_blocks, num_blocks):
-                # Clear any pending speculation
+                # Clear any stale speculation
                 self.speculation_ready.clear()
                 with self.speculation_lock:
                     self.speculative_result = None
 
-                # Create state snapshot for speculative engine
+                # Create state snapshot
                 state = InferenceState(
                     block_index=block_index + 1,
-                    current_start_frame=current_start_frame,
+                    current_start_frame=current_start_frame + num_frame_per_block,
                     kv_cache1=pipeline.kv_cache1,
                     kv_cache_mouse=pipeline.kv_cache_mouse,
                     kv_cache_keyboard=pipeline.kv_cache_keyboard,
@@ -872,8 +874,32 @@ class SpeculativeInferenceEngine:
                     device=device
                 )
 
-                # Queue speculation with same action as last
+                # Queue speculation with current action (user likely continues same input)
                 self.speculation_task_queue.put((action, state))
+
+            # Send frames to client (this happens AFTER speculation is queued)
+            for frame_idx, frame in enumerate(video_np):
+                await websocket.send_json({
+                    "type": "frame",
+                    "data": self._frame_to_base64(frame),
+                    "block": block_index + 1,
+                    "frame": frame_idx
+                })
+                # Small delay between frames for smooth playback
+                await asyncio.sleep(0.033)  # ~30fps frame rate
+
+            current_start_frame += num_frame_per_block
+
+            block_time = time.time() - block_start_time
+            hit_rate = speculation_hits / (speculation_hits + speculation_misses) * 100 if (speculation_hits + speculation_misses) > 0 else 0
+
+            await websocket.send_json({
+                "type": "block_complete",
+                "block": block_index + 1,
+                "time": f"{block_time:.2f}s",
+                "speculation_hit": use_speculation,
+                "hit_rate": f"{hit_rate:.1f}%"
+            })
 
         # Final stats
         total = speculation_hits + speculation_misses
@@ -952,12 +978,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif msg_type == "action":
                 if inference_engine and inference_engine.is_running:
-                    await inference_engine.action_queue.put(data)
+                    # Update continuous action tracking (non-blocking)
+                    inference_engine._set_current_action({
+                        "keyboard": data.get("keyboard", "q"),
+                        "mouse": data.get("mouse", "u")
+                    })
 
             elif msg_type == "stop":
                 if inference_engine:
                     inference_engine.stop()
-                    await inference_engine.action_queue.put(None)
                     await websocket.send_json({"type": "stopped"})
 
     except WebSocketDisconnect:
@@ -982,6 +1011,8 @@ def parse_args():
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--fast", action="store_true",
                         help="Use 2 denoising steps instead of 3 (~33% speedup)")
+    parser.add_argument("--no-warmup", action="store_true",
+                        help="Skip kernel warmup (kernels will compile lazily on first inference)")
     return parser.parse_args()
 
 

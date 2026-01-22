@@ -199,7 +199,10 @@ class TensorParallelInferenceEngine:
         dist.barrier()
         print_rank0("Model initialization complete!")
 
-        self._warmup()
+        if not getattr(self.args, 'no_warmup', False):
+            self._warmup()
+        else:
+            print_rank0("Skipping warmup (--no-warmup). Kernels will compile on first inference.")
 
     def _warmup(self):
         """Warmup the model to compile kernels."""
@@ -893,7 +896,10 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
-    parser.add_argument("--fast", action="store_true")
+    parser.add_argument("--fast", action="store_true",
+                        help="Use 2 denoising steps instead of 3 (~33% speedup)")
+    parser.add_argument("--no-warmup", action="store_true",
+                        help="Skip kernel warmup (kernels will compile lazily on first inference)")
     return parser.parse_args()
 
 

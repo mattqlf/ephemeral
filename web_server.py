@@ -152,7 +152,10 @@ class InferenceEngine:
         print("Models loaded successfully!")
 
         # Warmup: trigger kernel compilation now instead of lazily
-        self._warmup()
+        if not getattr(self.args, 'no_warmup', False):
+            self._warmup()
+        else:
+            print("Skipping warmup (--no-warmup). Kernels will compile on first inference.")
 
         print("\n  TIP: Keep this server running to avoid reloading models.\n")
 
@@ -683,6 +686,8 @@ def parse_args():
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--fast", action="store_true",
                         help="Use 2 denoising steps instead of 3 for faster inference (~33%% speedup, slight quality loss)")
+    parser.add_argument("--no-warmup", action="store_true",
+                        help="Skip kernel warmup (kernels will compile lazily on first inference)")
     return parser.parse_args()
 
 

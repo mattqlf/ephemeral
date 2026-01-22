@@ -100,7 +100,13 @@ uv run python web_server_speculative.py \
 Splits the model across GPUs to reduce per-block latency. Supports 2, 3, 4, or 6 GPUs.
 
 ```bash
+# Using the launcher (recommended)
 uv run python launch_tensor_parallel.py --num_gpus 2 \
+    --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
+    --port 8888 --fast
+
+# Or directly with torchrun
+uv run torchrun --nproc_per_node=2 web_server_tensor_parallel.py \
     --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
     --port 8888 --fast
 ```

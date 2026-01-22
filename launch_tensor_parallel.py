@@ -66,6 +66,8 @@ Examples:
                         help="Server port (default: 8080)")
     parser.add_argument("--fast", action="store_true",
                         help="Use fast mode (2 denoising steps instead of 3)")
+    parser.add_argument("--no-warmup", action="store_true",
+                        help="Skip kernel warmup (kernels will compile lazily on first inference)")
 
     args = parser.parse_args()
 
@@ -98,6 +100,7 @@ Examples:
     print(f"Checkpoint: {args.checkpoint_path}")
     print(f"Port: {args.port}")
     print(f"Fast mode: {args.fast}")
+    print(f"Skip warmup: {args.no_warmup}")
     print(f"=" * 60)
 
     # Build torchrun command via uv
@@ -118,6 +121,9 @@ Examples:
 
     if args.fast:
         cmd.append("--fast")
+
+    if args.no_warmup:
+        cmd.append("--no-warmup")
 
     print(f"\nExecuting: {' '.join(cmd)}\n")
 
