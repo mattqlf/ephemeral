@@ -80,13 +80,15 @@ echo "Flash-attn wheel: $FLASH_ATTN_WHEEL"
 rm -f uv.lock
 
 if [[ "$USE_B200_CONFIG" == true ]] && [[ -n "$TORCH_VERSION" ]]; then
-  # B200 RunPod template: PyTorch is pre-installed, don't create venv
+  # B200 RunPod template: PyTorch is pre-installed
+  # Create venv with --system-site-packages to inherit torch
   echo ""
-  echo "Using pre-installed PyTorch from RunPod template..."
+  echo "Creating virtual environment (inheriting system PyTorch $TORCH_VERSION)..."
+  uv venv --system-site-packages --python "$PYTHON_VERSION"
 
   # Install dependencies without overriding torch
   echo "Installing dependencies (excluding torch)..."
-  uv pip install --system \
+  uv pip install \
     "accelerate>=1.1.1" \
     "av" \
     "clip @ git+https://github.com/openai/CLIP.git" \
@@ -121,10 +123,10 @@ if [[ "$USE_B200_CONFIG" == true ]] && [[ -n "$TORCH_VERSION" ]]; then
     "wandb"
 
   echo "Installing flash-attn (pre-built wheel for PyTorch 2.8 + CUDA 12.8)..."
-  uv pip install --system "$FLASH_ATTN_WHEEL"
+  uv pip install "$FLASH_ATTN_WHEEL"
 
   echo "Installing setuptools (required for torch.compile)..."
-  uv pip install --system setuptools
+  uv pip install setuptools
 else
   # Standard setup: create venv with Python 3.10
   echo "Creating virtual environment..."
@@ -146,11 +148,7 @@ if [[ -d "$WEIGHTS_DIR" && -n "$(ls -A "$WEIGHTS_DIR" 2>/dev/null)" ]]; then
   echo "Model weights already exist, skipping download."
 else
   echo "Downloading model weights (~30GB)..."
-  if [[ "$USE_B200_CONFIG" == true ]] && [[ -n "$TORCH_VERSION" ]]; then
-    huggingface-cli download Skywork/Matrix-Game-2.0 --local-dir "$WEIGHTS_DIR"
-  else
-    uv run huggingface-cli download Skywork/Matrix-Game-2.0 --local-dir "$WEIGHTS_DIR"
-  fi
+  uv run huggingface-cli download Skywork/Matrix-Game-2.0 --local-dir "$WEIGHTS_DIR"
 fi
 
 echo ""
@@ -159,39 +157,20 @@ echo "Setup complete!"
 echo "============================================"
 echo ""
 
-if [[ "$USE_B200_CONFIG" == true ]] && [[ -n "$TORCH_VERSION" ]]; then
-  echo "B200/PyTorch 2.8+ detected. Run commands directly (no 'uv run' needed):"
-  echo ""
-  echo "To run the web UI (recommended):"
-  echo ""
-  echo "  python web_server.py \\"
-  echo "      --config_path configs/inference_yaml/inference_universal.yaml \\"
-  echo "      --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \\"
-  echo "      --pretrained_model_path Matrix-Game-2.0 \\"
-  echo "      --port 8888"
-  echo ""
-  echo "Or run CLI mode:"
-  echo ""
-  echo "  python inference_streaming.py \\"
-  echo "      --config_path configs/inference_yaml/inference_universal.yaml \\"
-  echo "      --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \\"
-  echo "      --pretrained_model_path Matrix-Game-2.0"
-else
-  echo "To run the web UI (recommended):"
-  echo ""
-  echo "  uv run python web_server.py \\"
-  echo "      --config_path configs/inference_yaml/inference_universal.yaml \\"
-  echo "      --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \\"
-  echo "      --pretrained_model_path Matrix-Game-2.0 \\"
-  echo "      --port 8888"
-  echo ""
-  echo "Or run CLI mode:"
-  echo ""
-  echo "  uv run python inference_streaming.py \\"
-  echo "      --config_path configs/inference_yaml/inference_universal.yaml \\"
-  echo "      --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \\"
-  echo "      --pretrained_model_path Matrix-Game-2.0"
-fi
+echo "To run the web UI (recommended):"
+echo ""
+echo "  uv run python web_server.py \\"
+echo "      --config_path configs/inference_yaml/inference_universal.yaml \\"
+echo "      --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \\"
+echo "      --pretrained_model_path Matrix-Game-2.0 \\"
+echo "      --port 8888"
+echo ""
+echo "Or run CLI mode:"
+echo ""
+echo "  uv run python inference_streaming.py \\"
+echo "      --config_path configs/inference_yaml/inference_universal.yaml \\"
+echo "      --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \\"
+echo "      --pretrained_model_path Matrix-Game-2.0"
 
 echo ""
 echo "Then open the Jupyter Lab HTTP link in RunPod to access the web UI."
