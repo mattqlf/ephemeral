@@ -13,9 +13,17 @@ Worlds that never were and never will be again. Each moment rendered from though
 
 ## Requirements
 
-- NVIDIA GPU with 24GB+ VRAM (A100, B200 recommended)
+- NVIDIA GPU with 24GB+ VRAM (A100, H100, H200, B200 recommended)
 - Linux
 - 64GB RAM
+
+### Multi-GPU Options
+
+| Setup | GPUs | VRAM per GPU | Best For |
+|-------|------|--------------|----------|
+| Single GPU | 1 | 24GB+ | Basic usage |
+| Speculative | 2 | 24GB each | Interactive (same-key sequences) |
+| Tensor Parallel | 2-4 | 16GB+ each | Lower latency |
 
 ## Installation
 
@@ -71,14 +79,45 @@ uv run python inference_streaming.py \
     --pretrained_model_path Matrix-Game-2.0
 ```
 
+## Multi-GPU Inference
+
+For improved performance with multiple GPUs, two parallelism strategies are available:
+
+### Speculative Pipelining (2 GPUs)
+
+Uses a second GPU to pre-generate the next block assuming the same action. When the user continues holding the same key, the frame is delivered instantly.
+
+```bash
+uv run python web_server_speculative.py \
+    --config_path configs/inference_yaml/inference_universal.yaml \
+    --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
+    --pretrained_model_path Matrix-Game-2.0 \
+    --port 8888 --fast
+```
+
+### Tensor Parallelism (2-4 GPUs)
+
+Splits the model across GPUs to reduce per-block latency. Supports 2, 3, 4, or 6 GPUs.
+
+```bash
+uv run python launch_tensor_parallel.py --num_gpus 2 \
+    --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
+    --port 8888 --fast
+```
+
 ## Performance
 
 | Hardware | Time per block | Effective FPS |
 |----------|----------------|---------------|
-| A100 80GB | ~2.2s | ~5-6 |
-| A100 + `--fast` | ~1.5s | ~8 |
-| B200 | ~0.8-1.0s | ~12-15 |
-| B200 + `--fast` | ~0.5-0.7s | ~17-20 |
+| 1x A100 80GB | ~2.2s | ~5-6 |
+| 1x A100 + `--fast` | ~1.5s | ~8 |
+| 2x A100 speculative | ~0.1-1.5s | ~10-25* |
+| 2x A100 tensor parallel | ~1.3s | ~9 |
+| 4x A100 tensor parallel | ~0.9s | ~13 |
+| 1x B200 | ~0.8-1.0s | ~12-15 |
+| 1x B200 + `--fast` | ~0.5-0.7s | ~17-20 |
+
+*Speculative FPS depends on hit rate (higher when holding same key)
 
 ## Tips
 
