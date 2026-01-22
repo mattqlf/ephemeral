@@ -49,26 +49,17 @@ else
 fi
 
 # Select flash-attn wheel based on configuration
-# Pre-built wheels from: https://github.com/mjun0812/flash-attention-prebuild-wheels
+# Official wheels from: https://github.com/Dao-AILab/flash-attention/releases
+# Detect CXX11 ABI setting from PyTorch
+CXX11_ABI="FALSE"
+if [[ -n "$TORCH_VERSION" ]]; then
+  CXX11_ABI=$(python3 -c "import torch; print('TRUE' if torch._C._GLIBCXX_USE_CXX11_ABI else 'FALSE')" 2>/dev/null || echo "FALSE")
+  echo "Detected CXX11 ABI: $CXX11_ABI"
+fi
+
 if [[ "$USE_B200_CONFIG" == true ]]; then
-  case "$PYTHON_VERSION" in
-    3.10)
-      FLASH_ATTN_WHEEL="https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.5.4/flash_attn-2.8.3+cu128torch2.8-cp310-cp310-linux_x86_64.whl"
-      ;;
-    3.11)
-      FLASH_ATTN_WHEEL="https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.5.4/flash_attn-2.8.3+cu128torch2.8-cp311-cp311-linux_x86_64.whl"
-      ;;
-    3.12)
-      FLASH_ATTN_WHEEL="https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.5.4/flash_attn-2.8.3+cu128torch2.8-cp312-cp312-linux_x86_64.whl"
-      ;;
-    3.13)
-      FLASH_ATTN_WHEEL="https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.2/flash_attn-2.8.3+cu128torch2.8-cp313-cp313-linux_x86_64.whl"
-      ;;
-    *)
-      echo "Warning: Unsupported Python version $PYTHON_VERSION for B200 config, defaulting to Python 3.11 wheel"
-      FLASH_ATTN_WHEEL="https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.5.4/flash_attn-2.8.3+cu128torch2.8-cp311-cp311-linux_x86_64.whl"
-      ;;
-  esac
+  # PyTorch 2.8 wheels from official Dao-AILab releases
+  FLASH_ATTN_WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abi${CXX11_ABI}-cp${PYTHON_VERSION//./}-cp${PYTHON_VERSION//./}-linux_x86_64.whl"
 else
   # Standard config: PyTorch 2.5 + CUDA 12 + Python 3.10
   FLASH_ATTN_WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.5cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"
@@ -79,15 +70,24 @@ echo "Flash-attn wheel: $FLASH_ATTN_WHEEL"
 # Remove stale lockfile (may contain old flash-attn reference)
 rm -f uv.lock
 
-if [[ "$USE_B200_CONFIG" == true ]] && [[ -n "$TORCH_VERSION" ]]; then
-  # B200 RunPod template: PyTorch is pre-installed
-  # Create venv with --system-site-packages to inherit torch
+if [[ "$USE_B200_CONFIG" == true ]]; then
+  # B200/Blackwell requires PyTorch with sm_100 support
+  # The RunPod template's PyTorch may not have sm_100, so we install from official cu128 index
   echo ""
-  echo "Creating virtual environment (inheriting system PyTorch $TORCH_VERSION)..."
-  uv venv --system-site-packages --python "$PYTHON_VERSION"
+  echo "Creating virtual environment for B200..."
+  uv venv --python "$PYTHON_VERSION"
 
-  # Install dependencies without overriding torch
-  echo "Installing dependencies (excluding torch)..."
+  # Install PyTorch with sm_100 (Blackwell) support from official index
+  echo "Installing PyTorch 2.8.0 with Blackwell (sm_100) support..."
+  uv pip install torch==2.8.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+  # Re-detect CXX11 ABI after installing PyTorch
+  CXX11_ABI=$(uv run python -c "import torch; print('TRUE' if torch._C._GLIBCXX_USE_CXX11_ABI else 'FALSE')" 2>/dev/null || echo "FALSE")
+  echo "Detected CXX11 ABI: $CXX11_ABI"
+  FLASH_ATTN_WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abi${CXX11_ABI}-cp${PYTHON_VERSION//./}-cp${PYTHON_VERSION//./}-linux_x86_64.whl"
+
+  # Install dependencies
+  echo "Installing dependencies..."
   uv pip install \
     "accelerate>=1.1.1" \
     "av" \
@@ -122,7 +122,7 @@ if [[ "$USE_B200_CONFIG" == true ]] && [[ -n "$TORCH_VERSION" ]]; then
     "uvicorn[standard]" \
     "wandb"
 
-  echo "Installing flash-attn (pre-built wheel for PyTorch 2.8 + CUDA 12.8)..."
+  echo "Installing flash-attn (pre-built wheel for PyTorch 2.8)..."
   uv pip install "$FLASH_ATTN_WHEEL"
 
   echo "Installing setuptools (required for torch.compile)..."

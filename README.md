@@ -46,7 +46,8 @@ uv run python web_server.py \
     --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
     --pretrained_model_path Matrix-Game-2.0 \
     --port 8888 \
-    --fast
+    --fast \
+    --no-warmup
 ```
 
 Then open `http://<your-server-ip>:8888` in your browser.
