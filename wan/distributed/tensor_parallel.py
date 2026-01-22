@@ -28,7 +28,7 @@ import torch
 import torch.nn as nn
 import torch.distributed as dist
 from torch import Tensor
-from torch.cuda.amp import custom_fwd, custom_bwd
+from torch.amp import custom_fwd, custom_bwd
 
 
 # Global tensor parallel state
@@ -115,7 +115,7 @@ class _AllReduceFunc(torch.autograd.Function):
     """All-reduce the input tensor across tensor parallel group."""
 
     @staticmethod
-    @custom_fwd
+    @custom_fwd(device_type='cuda')
     def forward(ctx, input_: Tensor) -> Tensor:
         if get_tensor_parallel_world_size() == 1:
             return input_
@@ -125,7 +125,7 @@ class _AllReduceFunc(torch.autograd.Function):
         return output
 
     @staticmethod
-    @custom_bwd
+    @custom_bwd(device_type='cuda')
     def backward(ctx, grad_output: Tensor) -> Tensor:
         # Gradient is also all-reduced in backward pass
         if get_tensor_parallel_world_size() == 1:
@@ -145,7 +145,7 @@ class _AllGatherFunc(torch.autograd.Function):
     """All-gather the input tensor across tensor parallel group along dim."""
 
     @staticmethod
-    @custom_fwd
+    @custom_fwd(device_type='cuda')
     def forward(ctx, input_: Tensor, dim: int) -> Tensor:
         ctx.dim = dim
         world_size = get_tensor_parallel_world_size()
@@ -162,7 +162,7 @@ class _AllGatherFunc(torch.autograd.Function):
         return output
 
     @staticmethod
-    @custom_bwd
+    @custom_bwd(device_type='cuda')
     def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None]:
         dim = ctx.dim
         world_size = get_tensor_parallel_world_size()
@@ -185,7 +185,7 @@ class _ReduceScatterFunc(torch.autograd.Function):
     """Reduce-scatter the input tensor across tensor parallel group along dim."""
 
     @staticmethod
-    @custom_fwd
+    @custom_fwd(device_type='cuda')
     def forward(ctx, input_: Tensor, dim: int) -> Tensor:
         ctx.dim = dim
         world_size = get_tensor_parallel_world_size()
@@ -205,7 +205,7 @@ class _ReduceScatterFunc(torch.autograd.Function):
         return output
 
     @staticmethod
-    @custom_bwd
+    @custom_bwd(device_type='cuda')
     def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None]:
         dim = ctx.dim
         world_size = get_tensor_parallel_world_size()
@@ -229,12 +229,12 @@ class _CopyToModelParallelRegion(torch.autograd.Function):
     """Pass input through, all-reduce on backward."""
 
     @staticmethod
-    @custom_fwd
+    @custom_fwd(device_type='cuda')
     def forward(ctx, input_: Tensor) -> Tensor:
         return input_
 
     @staticmethod
-    @custom_bwd
+    @custom_bwd(device_type='cuda')
     def backward(ctx, grad_output: Tensor) -> Tensor:
         return all_reduce(grad_output)
 
@@ -248,12 +248,12 @@ class _ReduceFromModelParallelRegion(torch.autograd.Function):
     """All-reduce forward, identity backward."""
 
     @staticmethod
-    @custom_fwd
+    @custom_fwd(device_type='cuda')
     def forward(ctx, input_: Tensor) -> Tensor:
         return all_reduce(input_)
 
     @staticmethod
-    @custom_bwd
+    @custom_bwd(device_type='cuda')
     def backward(ctx, grad_output: Tensor) -> Tensor:
         return grad_output
 

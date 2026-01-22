@@ -195,8 +195,11 @@ class TensorParallelInferenceEngine:
         self.frame_seq_length = 880  # 44 * 80 / (2 * 2)
         self.context_noise = self.config.get('context_noise', 900)
 
+        # Set generator's num_frame_per_block to match config (overrides default of 1)
+        self.generator.num_frame_per_block = self.num_frame_per_block
+
         # Synchronize all ranks
-        dist.barrier()
+        dist.barrier(device_ids=[self.local_rank])
         print_rank0("Model initialization complete!")
 
         if not getattr(self.args, 'no_warmup', False):
@@ -272,7 +275,7 @@ class TensorParallelInferenceEngine:
                 dummy_latent = output.transpose(1, 2)
                 _, vae_cache = self.vae_decoder(dummy_latent.half(), *vae_cache)
 
-        dist.barrier()
+        dist.barrier(device_ids=[self.local_rank])
         torch.cuda.empty_cache()
         print_rank0("Warmup complete!")
 

@@ -73,7 +73,8 @@ class WanDiffusionWrapper(torch.nn.Module):
     ):
         super().__init__()
         print(model_config)
-        self.model = CausalWanModel.from_config(model_config)
+        config_dict = CausalWanModel.load_config(model_config)
+        self.model = CausalWanModel.from_config(config_dict)
         self.model.eval()
 
         # For non-causal diffusion, all frames share the same timestep
