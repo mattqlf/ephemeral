@@ -2,8 +2,8 @@
 Speculative Pipelining Web Server for Multi-GPU Inference
 
 This server runs two inference engines on separate GPUs:
-- Primary engine: Generates current block based on user input
-- Speculative engine: Pre-generates next block assuming same action
+- Primary engine (GPU 0): Generates current block based on user input
+- Speculative engine (GPU 1): Pre-generates next block assuming same action
 
 If the user's next action matches the speculation, the pre-generated block
 is used immediately (near-zero latency). If not, it's discarded and regenerated.
@@ -15,7 +15,7 @@ Usage:
         --pretrained_model_path Matrix-Game-2.0 \
         --port 8888
 
-Requires: 2+ GPUs with sufficient VRAM (~80GB each)
+Requires: 2 GPUs with sufficient VRAM (~24GB each)
 """
 
 import argparse
@@ -24,27 +24,26 @@ import base64
 import copy
 import io
 import os
+import time
 import warnings
-import concurrent.futures
-from dataclasses import dataclass
-from typing import Optional, Dict, Any
-from threading import Thread, Lock
+from dataclasses import dataclass, field
+from typing import Optional, Dict, Any, List
+from threading import Thread, Lock, Event
 import queue
 
 import numpy as np
 import torch
 import torch._dynamo
 
-# Increase dynamo cache size to prevent VAE cache thrashing
 torch._dynamo.config.cache_size_limit = 64
 
 from PIL import Image
 from einops import rearrange
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
 from omegaconf import OmegaConf
 from safetensors.torch import load_file
+from torchvision.transforms import v2
 
 from pipeline import CausalInferenceStreamingPipeline
 from pipeline.causal_inference import cond_current
@@ -52,20 +51,116 @@ from wan.vae.wanx_vae import get_wanx_vae_wrapper
 from demo_utils.vae_block3 import VAEDecoderWrapper
 from demo_utils.constant import ZERO_VAE_CACHE
 from utils.misc import set_seed
-from utils.conditions import Bench_actions_universal, Bench_actions_gta_drive, Bench_actions_templerun
-from utils.misc import load_image
-from wan.modules.model import WanModel
-from wan.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
+from utils.conditions import Bench_actions_universal
+from utils.wan_wrapper import WanDiffusionWrapper
 
-app = FastAPI()
+app = FastAPI(title="Matrix-Game 2.0 Speculative Server")
+
+
+def clone_kv_cache(kv_cache: List[dict], target_device: torch.device) -> List[dict]:
+    """Deep clone KV cache to target device."""
+    if kv_cache is None:
+        return None
+    cloned = []
+    for block_cache in kv_cache:
+        cloned.append({
+            "k": block_cache["k"].clone().to(target_device),
+            "v": block_cache["v"].clone().to(target_device),
+            "global_end_index": block_cache["global_end_index"].clone().to(target_device),
+            "local_end_index": block_cache["local_end_index"].clone().to(target_device),
+        })
+    return cloned
+
+
+def clone_crossattn_cache(cache: List[dict], target_device: torch.device) -> List[dict]:
+    """Deep clone cross-attention cache to target device."""
+    if cache is None:
+        return None
+    cloned = []
+    for block_cache in cache:
+        cloned.append({
+            "k": block_cache["k"].clone().to(target_device),
+            "v": block_cache["v"].clone().to(target_device),
+            "is_init": block_cache["is_init"],
+        })
+    return cloned
+
+
+def clone_vae_cache(vae_cache: List, target_device: torch.device) -> List:
+    """Deep clone VAE decoder cache to target device."""
+    if vae_cache is None:
+        return None
+    cloned = []
+    for item in vae_cache:
+        if item is None:
+            cloned.append(None)
+        elif isinstance(item, torch.Tensor):
+            cloned.append(item.clone().to(target_device))
+        else:
+            cloned.append(item)
+    return cloned
+
+
+def copy_kv_cache_inplace(src: List[dict], dst: List[dict]):
+    """Copy KV cache values in-place (same device)."""
+    for src_block, dst_block in zip(src, dst):
+        dst_block["k"].copy_(src_block["k"])
+        dst_block["v"].copy_(src_block["v"])
+        dst_block["global_end_index"].copy_(src_block["global_end_index"])
+        dst_block["local_end_index"].copy_(src_block["local_end_index"])
+
+
+def copy_crossattn_cache_inplace(src: List[dict], dst: List[dict]):
+    """Copy cross-attention cache values in-place (same device)."""
+    for src_block, dst_block in zip(src, dst):
+        dst_block["k"].copy_(src_block["k"])
+        dst_block["v"].copy_(src_block["v"])
+        dst_block["is_init"] = src_block["is_init"]
+
+
+def copy_vae_cache_inplace(src: List, dst: List):
+    """Copy VAE cache values in-place (same device)."""
+    for i, item in enumerate(src):
+        if item is None:
+            dst[i] = None
+        elif isinstance(item, torch.Tensor):
+            if dst[i] is None:
+                dst[i] = item.clone()
+            else:
+                dst[i].copy_(item)
+        else:
+            dst[i] = item
 
 
 @dataclass
-class SpeculativeBlock:
-    """Represents a speculatively generated block."""
+class InferenceState:
+    """Complete state needed to continue inference from a checkpoint."""
     block_index: int
-    action: Dict[str, str]  # {"keyboard": "w", "mouse": "u"}
-    frames: list  # List of numpy frames
+    current_start_frame: int
+    kv_cache1: List[dict]
+    kv_cache_mouse: List[dict]
+    kv_cache_keyboard: List[dict]
+    crossattn_cache: List[dict]
+    vae_cache: List
+    conditional_dict: dict
+    output: torch.Tensor
+    noise: torch.Tensor
+    device: torch.device
+
+
+@dataclass
+class SpeculativeResult:
+    """Result from speculative generation."""
+    block_index: int
+    action: Dict[str, str]
+    frames: np.ndarray
+    denoised_pred: torch.Tensor
+    vae_cache: List
+    kv_cache1: List[dict]
+    kv_cache_mouse: List[dict]
+    kv_cache_keyboard: List[dict]
+    crossattn_cache: List[dict]
+    conditional_dict: dict
     valid: bool = True
 
 
@@ -73,93 +168,105 @@ class SpeculativeInferenceEngine:
     """
     Manages two inference engines for speculative pipelining.
 
-    Engine 0 (primary): Generates blocks based on actual user input
-    Engine 1 (speculative): Pre-generates next block assuming same action
+    Primary (GPU 0): Generates blocks based on actual user input
+    Speculative (GPU 1): Pre-generates next block assuming same action
     """
 
-    def __init__(self, args, config):
+    def __init__(self, args):
         self.args = args
-        self.config = config
-        self.weight_dtype = torch.float16 if config.mixed_precision else torch.float32
+        self.weight_dtype = torch.bfloat16
 
-        # Check GPU availability
         self.num_gpus = torch.cuda.device_count()
         if self.num_gpus < 2:
-            print(f"Warning: Only {self.num_gpus} GPU(s) available. Speculative mode works best with 2+ GPUs.")
-            print("Falling back to single-GPU mode with async speculation.")
+            raise RuntimeError(
+                f"Speculative mode requires 2 GPUs, but only {self.num_gpus} available. "
+                "Use web_server.py for single-GPU inference."
+            )
 
-        self.device_primary = "cuda:0"
-        self.device_speculative = f"cuda:{min(1, self.num_gpus - 1)}"
+        self.device_primary = torch.device("cuda:0")
+        self.device_speculative = torch.device("cuda:1")
 
         print(f"Primary engine: {self.device_primary}")
         print(f"Speculative engine: {self.device_speculative}")
 
-        # Initialize engines
-        self.primary_engine = None
-        self.speculative_engine = None
+        self._init_config()
 
         # Speculation state
-        self.speculative_block: Optional[SpeculativeBlock] = None
+        self.speculative_result: Optional[SpeculativeResult] = None
         self.speculation_lock = Lock()
-        self.speculation_queue = queue.Queue()
+        self.speculation_task_queue = queue.Queue()
+        self.speculation_ready = Event()
+        self.stop_speculation = Event()
 
-        # Action queue for WebSocket
+        # Session state
         self.action_queue = asyncio.Queue()
         self.is_running = False
         self.should_stop = False
 
         self._init_engines()
 
-    def _init_engines(self):
-        """Initialize both inference engines."""
-        print("Initializing speculative inference engines...")
+        self.frame_process = v2.Compose([
+            v2.Resize(size=(352, 640), antialias=True),
+            v2.ToTensor(),
+            v2.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+        ])
 
+    def _init_config(self):
+        self.config = OmegaConf.load(self.args.config_path)
+        self.mode = self.config.get('mode', 'universal')
+
+        if getattr(self.args, 'fast', False):
+            print("[fast mode] Using 2 denoising steps (was 3)")
+            self.config.denoising_step_list = [1000, 500]
+
+    def _init_engines(self):
+        """Initialize both inference engines in parallel."""
+        print("Initializing speculative inference engines...")
         warnings.filterwarnings("ignore", category=FutureWarning, message=".*weights_only.*")
 
         # Load shared weights once
-        print("Loading shared weights...")
-
+        print("Loading shared model weights...")
         vae_path = os.path.join(self.args.pretrained_model_path, "Wan2.1_VAE.pth")
         vae_state_dict = torch.load(vae_path, map_location="cpu", mmap=True)
         decoder_state_dict = {k: v for k, v in vae_state_dict.items()
-                            if 'decoder.' in k or 'conv2' in k}
+                              if 'decoder.' in k or 'conv2' in k}
 
         main_checkpoint = None
         if self.args.checkpoint_path:
+            print(f"Loading checkpoint: {self.args.checkpoint_path}")
             main_checkpoint = load_file(self.args.checkpoint_path)
 
-        # Initialize primary engine
-        print(f"Initializing primary engine on {self.device_primary}...")
-        self.primary_engine = self._create_engine(
+        # Initialize both engines
+        print(f"Creating primary engine on {self.device_primary}...")
+        self.primary = self._create_engine(
             self.device_primary, decoder_state_dict, main_checkpoint)
 
-        # Initialize speculative engine (on second GPU if available)
-        print(f"Initializing speculative engine on {self.device_speculative}...")
-        self.speculative_engine = self._create_engine(
+        print(f"Creating speculative engine on {self.device_speculative}...")
+        self.speculative = self._create_engine(
             self.device_speculative, decoder_state_dict, main_checkpoint)
 
         # Start speculation worker thread
-        self.speculation_thread = Thread(target=self._speculation_worker, daemon=True)
+        self.speculation_thread = Thread(
+            target=self._speculation_worker, daemon=True, name="speculation-worker")
         self.speculation_thread.start()
 
         print("Speculative engines ready!")
+        self._warmup_engines()
 
-    def _create_engine(self, device, decoder_state_dict, main_checkpoint):
+    def _create_engine(self, device: torch.device, decoder_state_dict: dict,
+                       main_checkpoint: Optional[dict]) -> dict:
         """Create a single inference engine on the specified device."""
-        from wan.modules.causal_model import WanCausalModel as WanDiffusionWrapper
-
         generator = WanDiffusionWrapper(
             **getattr(self.config, "model_kwargs", {}), is_causal=True)
 
-        # VAE decoder
         vae_decoder = VAEDecoderWrapper()
         vae_decoder.load_state_dict(copy.deepcopy(decoder_state_dict))
         vae_decoder.to(device, torch.float16)
         vae_decoder.requires_grad_(False)
         vae_decoder.eval()
+        print(f"  Compiling VAE decoder on {device}...")
         vae_decoder.compile(mode="max-autotune-no-cudagraphs")
 
-        # Pipeline
         pipeline = CausalInferenceStreamingPipeline(
             self.config, generator=generator, vae_decoder=vae_decoder)
 
@@ -169,7 +276,6 @@ class SpeculativeInferenceEngine:
         pipeline = pipeline.to(device=device, dtype=self.weight_dtype)
         pipeline.vae_decoder.to(torch.float16)
 
-        # VAE encoder
         vae = get_wanx_vae_wrapper(self.args.pretrained_model_path, torch.float16)
         vae.requires_grad_(False)
         vae.eval()
@@ -181,108 +287,311 @@ class SpeculativeInferenceEngine:
             "device": device,
         }
 
+    def _warmup_engines(self):
+        """Warmup both engines to compile kernels."""
+        print("Warming up engines...")
+        for name, engine in [("primary", self.primary), ("speculative", self.speculative)]:
+            print(f"  Warming up {name} engine...")
+            self._warmup_single_engine(engine)
+        print("Warmup complete!")
+
+    def _warmup_single_engine(self, engine: dict):
+        """Warmup a single engine."""
+        pipeline = engine["pipeline"]
+        device = engine["device"]
+
+        num_frame_per_block = pipeline.num_frame_per_block
+        denoising_steps = pipeline.denoising_step_list
+
+        # Create dummy inputs
+        test_image = torch.randn([1, 3, 1, 352, 640], device=device, dtype=self.weight_dtype)
+        with torch.no_grad():
+            visual_context_shape = engine["vae"].clip.encode_video(test_image).shape
+
+        max_output_frames = self.args.max_num_output_frames
+        num_frames = (max_output_frames - 1) * 4 + 1
+
+        cond_concat = torch.randn([1, 20, max_output_frames, 44, 80], device=device, dtype=self.weight_dtype)
+        visual_context = torch.randn(visual_context_shape, device=device, dtype=self.weight_dtype)
+        keyboard = torch.zeros([1, num_frames, 4], device=device, dtype=self.weight_dtype)
+        mouse = torch.zeros([1, num_frames, 2], device=device, dtype=self.weight_dtype)
+        noise = torch.randn([1, 16, max_output_frames, 44, 80], device=device, dtype=self.weight_dtype)
+
+        conditional_dict = {
+            "cond_concat": cond_concat,
+            "visual_context": visual_context,
+            "keyboard_cond": keyboard,
+            "mouse_cond": mouse,
+        }
+
+        cond = cond_current(conditional_dict, 0, num_frame_per_block)
+        noise_slice = noise[:, :, :num_frame_per_block]
+
+        pipeline._initialize_kv_cache(1, self.weight_dtype, device)
+        pipeline._initialize_kv_cache_mouse_and_keyboard(1, self.weight_dtype, device)
+        pipeline._initialize_crossattn_cache(1, self.weight_dtype, device)
+
+        with torch.no_grad():
+            output = noise_slice
+            for current_timestep in denoising_steps:
+                timestep = torch.ones([1, num_frame_per_block], device=device, dtype=torch.int64) * current_timestep
+                _, output = pipeline.generator(
+                    noisy_image_or_video=output,
+                    conditional_dict=cond,
+                    timestep=timestep,
+                    kv_cache=pipeline.kv_cache1,
+                    kv_cache_mouse=pipeline.kv_cache_mouse,
+                    kv_cache_keyboard=pipeline.kv_cache_keyboard,
+                    crossattn_cache=pipeline.crossattn_cache,
+                    current_start=0
+                )
+
+            # Context pass
+            context_timestep = torch.ones([1, num_frame_per_block], device=device, dtype=torch.int64) * pipeline.args.context_noise
+            pipeline.generator(
+                noisy_image_or_video=output,
+                conditional_dict=cond,
+                timestep=context_timestep,
+                kv_cache=pipeline.kv_cache1,
+                kv_cache_mouse=pipeline.kv_cache_mouse,
+                kv_cache_keyboard=pipeline.kv_cache_keyboard,
+                crossattn_cache=pipeline.crossattn_cache,
+                current_start=0
+            )
+
+            # VAE decoder warmup
+            vae_cache = [None] * len(ZERO_VAE_CACHE)
+            dummy_latent = output.transpose(1, 2)
+            _, vae_cache = pipeline.vae_decoder(dummy_latent.half(), *vae_cache)
+            _, _ = pipeline.vae_decoder(dummy_latent.half(), *vae_cache)
+
+        torch.cuda.empty_cache()
+
     def _speculation_worker(self):
-        """Background thread that generates speculative blocks."""
-        while True:
+        """Background thread that generates speculative blocks on GPU 1."""
+        print("[speculation] Worker thread started")
+
+        while not self.stop_speculation.is_set():
             try:
-                task = self.speculation_queue.get(timeout=1.0)
+                task = self.speculation_task_queue.get(timeout=0.5)
                 if task is None:
                     break
 
-                action, block_index, state = task
+                action, state = task
+                print(f"[speculation] Generating block {state.block_index + 1} with action {action}")
 
-                # Generate speculative block
-                frames = self._generate_block_sync(
-                    self.speculative_engine, state, action, block_index)
+                start_time = time.time()
+                result = self._generate_block_on_speculative(action, state)
+                elapsed = time.time() - start_time
 
                 with self.speculation_lock:
-                    self.speculative_block = SpeculativeBlock(
-                        block_index=block_index,
-                        action=action,
-                        frames=frames,
-                        valid=True
-                    )
+                    self.speculative_result = result
+                    self.speculation_ready.set()
+
+                print(f"[speculation] Block {state.block_index + 1} ready in {elapsed:.2f}s")
 
             except queue.Empty:
                 continue
             except Exception as e:
-                print(f"Speculation worker error: {e}")
+                import traceback
+                print(f"[speculation] Worker error: {e}")
+                traceback.print_exc()
 
-    def _generate_block_sync(self, engine, state, action, block_index):
-        """Synchronously generate a single block (for speculation thread)."""
-        # This is a simplified version - full implementation would need
-        # to properly manage the KV cache state
-        pass  # Placeholder for full implementation
+        print("[speculation] Worker thread stopped")
+
+    def _generate_block_on_speculative(self, action: Dict[str, str],
+                                        state: InferenceState) -> SpeculativeResult:
+        """Generate a single block on the speculative engine."""
+        pipeline = self.speculative["pipeline"]
+        device = self.device_speculative
+
+        # Transfer state to speculative device
+        pipeline.kv_cache1 = clone_kv_cache(state.kv_cache1, device)
+        pipeline.kv_cache_mouse = clone_kv_cache(state.kv_cache_mouse, device)
+        pipeline.kv_cache_keyboard = clone_kv_cache(state.kv_cache_keyboard, device)
+        pipeline.crossattn_cache = clone_crossattn_cache(state.crossattn_cache, device)
+        vae_cache = clone_vae_cache(state.vae_cache, device)
+
+        # Clone conditional dict to speculative device
+        conditional_dict = {
+            "cond_concat": state.conditional_dict["cond_concat"].to(device),
+            "visual_context": state.conditional_dict["visual_context"].to(device),
+            "keyboard_cond": state.conditional_dict["keyboard_cond"].clone().to(device),
+            "mouse_cond": state.conditional_dict["mouse_cond"].clone().to(device),
+        }
+
+        noise = state.noise.to(device)
+        num_frame_per_block = pipeline.num_frame_per_block
+        current_start_frame = state.current_start_frame
+        batch_size = 1
+
+        # Parse action to tensor format
+        current_actions = self._parse_action_to_tensor(action, device)
+
+        # Get noise slice for this block
+        noisy_input = noise[:, :, current_start_frame:current_start_frame + num_frame_per_block]
+
+        # Update conditions with the speculated action
+        new_act, conditional_dict = cond_current(
+            conditional_dict, current_start_frame, num_frame_per_block,
+            replace=current_actions, mode=self.mode)
+
+        # Denoising loop
+        with torch.no_grad():
+            for index, current_timestep in enumerate(pipeline.denoising_step_list):
+                timestep = torch.ones(
+                    [batch_size, num_frame_per_block],
+                    device=device, dtype=torch.int64) * current_timestep
+
+                if index < len(pipeline.denoising_step_list) - 1:
+                    _, denoised_pred = pipeline.generator(
+                        noisy_image_or_video=noisy_input,
+                        conditional_dict=new_act,
+                        timestep=timestep,
+                        kv_cache=pipeline.kv_cache1,
+                        kv_cache_mouse=pipeline.kv_cache_mouse,
+                        kv_cache_keyboard=pipeline.kv_cache_keyboard,
+                        crossattn_cache=pipeline.crossattn_cache,
+                        current_start=current_start_frame * pipeline.frame_seq_length
+                    )
+                    next_timestep = pipeline.denoising_step_list[index + 1]
+                    noisy_input = pipeline.scheduler.add_noise(
+                        rearrange(denoised_pred, 'b c f h w -> (b f) c h w'),
+                        torch.randn_like(rearrange(denoised_pred, 'b c f h w -> (b f) c h w')),
+                        next_timestep * torch.ones(
+                            [batch_size * num_frame_per_block], device=device, dtype=torch.long)
+                    )
+                    noisy_input = rearrange(noisy_input, '(b f) c h w -> b c f h w', b=batch_size)
+                else:
+                    _, denoised_pred = pipeline.generator(
+                        noisy_image_or_video=noisy_input,
+                        conditional_dict=new_act,
+                        timestep=timestep,
+                        kv_cache=pipeline.kv_cache1,
+                        kv_cache_mouse=pipeline.kv_cache_mouse,
+                        kv_cache_keyboard=pipeline.kv_cache_keyboard,
+                        crossattn_cache=pipeline.crossattn_cache,
+                        current_start=current_start_frame * pipeline.frame_seq_length
+                    )
+
+            # Update KV cache with context pass
+            context_timestep = torch.ones_like(timestep) * pipeline.args.context_noise
+            pipeline.generator(
+                noisy_image_or_video=denoised_pred,
+                conditional_dict=new_act,
+                timestep=context_timestep,
+                kv_cache=pipeline.kv_cache1,
+                kv_cache_mouse=pipeline.kv_cache_mouse,
+                kv_cache_keyboard=pipeline.kv_cache_keyboard,
+                crossattn_cache=pipeline.crossattn_cache,
+                current_start=current_start_frame * pipeline.frame_seq_length,
+            )
+
+            # VAE decode
+            denoised_pred_t = denoised_pred.transpose(1, 2)
+            video, vae_cache = pipeline.vae_decoder(denoised_pred_t.half(), *vae_cache)
+
+            video_np = rearrange(video, "B T C H W -> B T H W C")
+            video_np = ((video_np.float() + 1) * 127.5).clip(0, 255).cpu().numpy().astype(np.uint8)[0]
+
+        return SpeculativeResult(
+            block_index=state.block_index + 1,
+            action=action,
+            frames=video_np,
+            denoised_pred=denoised_pred,
+            vae_cache=vae_cache,
+            kv_cache1=pipeline.kv_cache1,
+            kv_cache_mouse=pipeline.kv_cache_mouse,
+            kv_cache_keyboard=pipeline.kv_cache_keyboard,
+            crossattn_cache=pipeline.crossattn_cache,
+            conditional_dict=conditional_dict,
+            valid=True
+        )
+
+    def _parse_action_to_tensor(self, action: Dict[str, str], device: torch.device) -> dict:
+        """Parse action from dict format to tensor format."""
+        CAM_VALUE = 0.1
+
+        keyboard_key = action.get("keyboard", "q").lower()
+        mouse_key = action.get("mouse", "u").lower()
+
+        CAMERA_VALUE_MAP = {
+            "i": [CAM_VALUE, 0], "k": [-CAM_VALUE, 0],
+            "j": [0, -CAM_VALUE], "l": [0, CAM_VALUE], "u": [0, 0]
+        }
+        KEYBOARD_IDX = {
+            "w": [1, 0, 0, 0], "s": [0, 1, 0, 0],
+            "a": [0, 0, 1, 0], "d": [0, 0, 0, 1], "q": [0, 0, 0, 0]
+        }
+
+        mouse_cond = torch.tensor(CAMERA_VALUE_MAP.get(mouse_key, [0, 0]),
+                                   device=device, dtype=self.weight_dtype)
+        keyboard_cond = torch.tensor(KEYBOARD_IDX.get(keyboard_key, [0, 0, 0, 0]),
+                                      device=device, dtype=self.weight_dtype)
+
+        return {"keyboard": keyboard_cond, "mouse": mouse_cond}
+
+    def _resizecrop(self, image, th, tw):
+        w, h = image.size
+        if h / w > th / tw:
+            new_w = int(w)
+            new_h = int(new_w * th / tw)
+        else:
+            new_h = int(h)
+            new_w = int(new_h * tw / th)
+        left = (w - new_w) / 2
+        top = (h - new_h) / 2
+        right = (w + new_w) / 2
+        bottom = (h + new_h) / 2
+        image = image.crop((left, top, right, bottom))
+        return image
 
     def _frame_to_base64(self, frame: np.ndarray) -> str:
-        """Convert a numpy frame to base64 JPEG."""
         img = Image.fromarray(frame.astype(np.uint8))
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG", quality=85)
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-    def _resizecrop(self, image, th, tw):
-        """Resize and crop image to target dimensions."""
-        w, h = image.size
-        if h / w > th / tw:
-            new_w = tw
-            new_h = int(new_w * h / w)
-        else:
-            new_h = th
-            new_w = int(new_h * w / h)
-        image = image.resize((new_w, new_h), Image.LANCZOS)
-        left, top = (new_w - tw) // 2, (new_h - th) // 2
-        return image.crop((left, top, left + tw, top + th))
-
-    @property
-    def mode(self):
-        return self.config.mode
-
-    @property
-    def frame_process(self):
-        import torchvision.transforms as transforms
-        return transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-        ])
-
     async def run_inference(self, img_input: str, websocket: WebSocket):
-        """
-        Run speculative inference loop.
-
-        The key optimization: while we wait for user input for block N,
-        we speculatively generate block N+1 assuming the same action.
-        """
+        """Run speculative inference loop."""
         self.is_running = True
         self.should_stop = False
 
-        engine = self.primary_engine
-        pipeline = engine["pipeline"]
-        vae = engine["vae"]
-        device = engine["device"]
-
-        # Clear action queue
+        # Clear queues
         while not self.action_queue.empty():
             try:
                 self.action_queue.get_nowait()
             except:
                 break
 
+        while not self.speculation_task_queue.empty():
+            try:
+                self.speculation_task_queue.get_nowait()
+            except:
+                break
+
+        with self.speculation_lock:
+            self.speculative_result = None
+        self.speculation_ready.clear()
+
+        engine = self.primary
+        pipeline = engine["pipeline"]
+        vae = engine["vae"]
+        device = engine["device"]
+
         try:
             # Load and process image
             if img_input.startswith('data:image'):
-                print(f"Processing uploaded image ({len(img_input) // 1024}KB base64)...")
+                print(f"Processing uploaded image...")
                 header, b64_data = img_input.split(',', 1)
                 img_bytes = base64.b64decode(b64_data)
                 image = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-                print(f"  Image size: {image.size}")
             else:
                 print(f"Loading image from: {img_input}")
+                from diffusers.utils import load_image
                 image = load_image(img_input)
 
             image = self._resizecrop(image, 352, 640)
-            print(f"  Resized to: {image.size}")
-
             image_tensor = self.frame_process(image)[None, :, None, :, :].to(
                 dtype=self.weight_dtype, device=device)
 
@@ -305,7 +614,6 @@ class SpeculativeInferenceEngine:
 
             num_frames = (max_output_frames - 1) * 4 + 1
 
-            # Setup conditions
             conditional_dict = {
                 "cond_concat": cond_concat.to(device=device, dtype=self.weight_dtype),
                 "visual_context": visual_context.to(device=device, dtype=self.weight_dtype)
@@ -328,14 +636,12 @@ class SpeculativeInferenceEngine:
                 "block": 0
             })
 
-            # Send ready signal
             await websocket.send_json({
                 "type": "ready",
                 "mode": self.mode,
-                "message": "Ready for input. Press keys to control."
+                "message": "Ready for input. Press keys to control. [SPECULATIVE MODE]"
             })
 
-            # Run speculative inference loop
             with torch.no_grad():
                 await self._speculative_inference_loop(
                     engine=engine,
@@ -358,16 +664,7 @@ class SpeculativeInferenceEngine:
         conditional_dict: dict,
         websocket: WebSocket
     ):
-        """
-        Speculative inference loop with pipelining.
-
-        Flow:
-        1. Request action from user
-        2. While waiting, check if we have a valid speculative block
-        3. If speculation matches user action, use it immediately
-        4. Otherwise, generate block normally
-        5. Start speculating on next block with same action
-        """
+        """Main inference loop with speculative pipelining."""
         pipeline = engine["pipeline"]
         device = engine["device"]
 
@@ -377,22 +674,15 @@ class SpeculativeInferenceEngine:
         max_blocks = self.args.max_blocks or num_blocks
 
         output = torch.zeros_like(noise)
-        vae_cache = copy.deepcopy(ZERO_VAE_CACHE)
-        for j in range(len(vae_cache)):
-            vae_cache[j] = None
+        vae_cache = [None] * len(ZERO_VAE_CACHE)
 
         # Initialize KV caches
-        pipeline.kv_cache1 = None
-        pipeline.kv_cache_keyboard = None
-        pipeline.kv_cache_mouse = None
-        pipeline.crossattn_cache = None
-
         pipeline._initialize_kv_cache(batch_size, noise.dtype, noise.device)
         pipeline._initialize_kv_cache_mouse_and_keyboard(batch_size, noise.dtype, noise.device)
         pipeline._initialize_crossattn_cache(batch_size, noise.dtype, noise.device)
 
         current_start_frame = 0
-        last_action = None
+        last_action = {"keyboard": "q", "mouse": "u"}
         speculation_hits = 0
         speculation_misses = 0
 
@@ -400,7 +690,9 @@ class SpeculativeInferenceEngine:
             if self.should_stop:
                 break
 
-            # Request action
+            block_start_time = time.time()
+
+            # Request action from user
             await websocket.send_json({
                 "type": "request_action",
                 "block": block_index + 1,
@@ -409,47 +701,77 @@ class SpeculativeInferenceEngine:
 
             # Wait for action
             try:
-                action = await asyncio.wait_for(
+                action_data = await asyncio.wait_for(
                     self.action_queue.get(),
                     timeout=120.0
                 )
-                if action is None:
+                if action_data is None:
                     break
-                current_actions = self._parse_action(action)
+                action = {
+                    "keyboard": action_data.get("keyboard", "q"),
+                    "mouse": action_data.get("mouse", "u")
+                }
             except asyncio.TimeoutError:
-                current_actions = self._parse_action({"keyboard": "q", "mouse": "u"})
+                action = {"keyboard": "q", "mouse": "u"}
 
-            # Check speculation hit
+            # Check if speculation matches
             use_speculation = False
-            with self.speculation_lock:
-                if (self.speculative_block and
-                    self.speculative_block.block_index == block_index + 1 and
-                    self.speculative_block.action == action and
-                    self.speculative_block.valid):
-                    use_speculation = True
-                    speculation_hits += 1
-                    print(f"[speculative] HIT block {block_index + 1} (hits: {speculation_hits}, misses: {speculation_misses})")
-                else:
-                    speculation_misses += 1
-                    if self.speculative_block:
-                        print(f"[speculative] MISS block {block_index + 1} - expected {self.speculative_block.action}, got {action}")
+            spec_result = None
 
-            if use_speculation and self.speculative_block.frames:
-                # Use pre-generated frames
-                video_np = self.speculative_block.frames
+            with self.speculation_lock:
+                if (self.speculative_result is not None and
+                    self.speculative_result.block_index == block_index + 1 and
+                    self.speculative_result.action == action and
+                    self.speculative_result.valid):
+                    use_speculation = True
+                    spec_result = self.speculative_result
+                    self.speculative_result = None
+                    speculation_hits += 1
+
+            if use_speculation:
+                print(f"[block {block_index + 1}] SPECULATION HIT! Using pre-generated block")
+
+                # Use speculative result
+                video_np = spec_result.frames
+
+                # Sync state from speculative back to primary
+                # Transfer caches back to primary device
+                copy_kv_cache_inplace(
+                    clone_kv_cache(spec_result.kv_cache1, device), pipeline.kv_cache1)
+                copy_kv_cache_inplace(
+                    clone_kv_cache(spec_result.kv_cache_mouse, device), pipeline.kv_cache_mouse)
+                copy_kv_cache_inplace(
+                    clone_kv_cache(spec_result.kv_cache_keyboard, device), pipeline.kv_cache_keyboard)
+                copy_crossattn_cache_inplace(
+                    clone_crossattn_cache(spec_result.crossattn_cache, device), pipeline.crossattn_cache)
+                vae_cache = clone_vae_cache(spec_result.vae_cache, device)
+
+                # Update conditional dict
+                conditional_dict["keyboard_cond"] = spec_result.conditional_dict["keyboard_cond"].to(device)
+                conditional_dict["mouse_cond"] = spec_result.conditional_dict["mouse_cond"].to(device)
+
+                output[:, :, current_start_frame:current_start_frame + num_frame_per_block] = \
+                    spec_result.denoised_pred.to(device)
+
             else:
-                # Generate block normally
+                if self.speculative_result is not None:
+                    print(f"[block {block_index + 1}] SPECULATION MISS - expected {self.speculative_result.action}, got {action}")
+                else:
+                    print(f"[block {block_index + 1}] No speculation available")
+                speculation_misses += 1
+
+                # Generate block on primary
+                current_actions = self._parse_action_to_tensor(action, device)
                 noisy_input = noise[:, :, current_start_frame:current_start_frame + num_frame_per_block]
 
                 new_act, conditional_dict = cond_current(
                     conditional_dict, current_start_frame, num_frame_per_block,
                     replace=current_actions, mode=self.mode)
 
-                # Denoising loop
                 for index, current_timestep in enumerate(pipeline.denoising_step_list):
                     timestep = torch.ones(
                         [batch_size, num_frame_per_block],
-                        device=noise.device, dtype=torch.int64) * current_timestep
+                        device=device, dtype=torch.int64) * current_timestep
 
                     if index < len(pipeline.denoising_step_list) - 1:
                         _, denoised_pred = pipeline.generator(
@@ -467,9 +789,9 @@ class SpeculativeInferenceEngine:
                             rearrange(denoised_pred, 'b c f h w -> (b f) c h w'),
                             torch.randn_like(rearrange(denoised_pred, 'b c f h w -> (b f) c h w')),
                             next_timestep * torch.ones(
-                                [batch_size * num_frame_per_block], device=noise.device, dtype=torch.long)
+                                [batch_size * num_frame_per_block], device=device, dtype=torch.long)
                         )
-                        noisy_input = rearrange(noisy_input, '(b f) c h w -> b c f h w', b=denoised_pred.shape[0])
+                        noisy_input = rearrange(noisy_input, '(b f) c h w -> b c f h w', b=batch_size)
                     else:
                         _, denoised_pred = pipeline.generator(
                             noisy_image_or_video=noisy_input,
@@ -484,7 +806,7 @@ class SpeculativeInferenceEngine:
 
                 output[:, :, current_start_frame:current_start_frame + num_frame_per_block] = denoised_pred
 
-                # Update KV cache
+                # Context pass to update KV cache
                 context_timestep = torch.ones_like(timestep) * pipeline.args.context_noise
                 pipeline.generator(
                     noisy_image_or_video=denoised_pred,
@@ -497,14 +819,14 @@ class SpeculativeInferenceEngine:
                     current_start=current_start_frame * pipeline.frame_seq_length,
                 )
 
-                # Decode
+                # VAE decode
                 denoised_pred_t = denoised_pred.transpose(1, 2)
                 video, vae_cache = pipeline.vae_decoder(denoised_pred_t.half(), *vae_cache)
 
                 video_np = rearrange(video, "B T C H W -> B T H W C")
                 video_np = ((video_np.float() + 1) * 127.5).clip(0, 255).cpu().numpy().astype(np.uint8)[0]
 
-            # Send frames
+            # Send frames to client
             for frame_idx, frame in enumerate(video_np):
                 await websocket.send_json({
                     "type": "frame",
@@ -517,48 +839,56 @@ class SpeculativeInferenceEngine:
             current_start_frame += num_frame_per_block
             last_action = action
 
-            # Queue speculation for next block (assuming same action)
-            # Note: Full implementation would clone KV cache state here
-            # self.speculation_queue.put((action, block_index + 2, state_snapshot))
+            block_time = time.time() - block_start_time
+            hit_rate = speculation_hits / (speculation_hits + speculation_misses) * 100 if (speculation_hits + speculation_misses) > 0 else 0
 
             await websocket.send_json({
                 "type": "block_complete",
-                "block": block_index + 1
+                "block": block_index + 1,
+                "time": f"{block_time:.2f}s",
+                "speculation_hit": use_speculation,
+                "hit_rate": f"{hit_rate:.1f}%"
             })
 
-        # Report speculation stats
+            # Queue speculation for next block (assume same action)
+            if block_index + 1 < min(max_blocks, num_blocks):
+                # Clear any pending speculation
+                self.speculation_ready.clear()
+                with self.speculation_lock:
+                    self.speculative_result = None
+
+                # Create state snapshot for speculative engine
+                state = InferenceState(
+                    block_index=block_index + 1,
+                    current_start_frame=current_start_frame,
+                    kv_cache1=pipeline.kv_cache1,
+                    kv_cache_mouse=pipeline.kv_cache_mouse,
+                    kv_cache_keyboard=pipeline.kv_cache_keyboard,
+                    crossattn_cache=pipeline.crossattn_cache,
+                    vae_cache=vae_cache,
+                    conditional_dict=conditional_dict,
+                    output=output,
+                    noise=noise,
+                    device=device
+                )
+
+                # Queue speculation with same action as last
+                self.speculation_task_queue.put((action, state))
+
+        # Final stats
         total = speculation_hits + speculation_misses
         if total > 0:
-            print(f"[speculative] Final stats: {speculation_hits}/{total} hits ({100*speculation_hits/total:.1f}%)")
+            print(f"\n[SPECULATION STATS] Hits: {speculation_hits}/{total} ({100*speculation_hits/total:.1f}%)")
 
         await websocket.send_json({"type": "complete"})
 
-    def _parse_action(self, action_data: dict) -> dict:
-        """Parse action from WebSocket message to tensor format."""
-        keyboard_map = {
-            'w': [1, 0, 0, 0], 'a': [0, 1, 0, 0],
-            's': [0, 0, 1, 0], 'd': [0, 0, 0, 1], 'q': [0, 0, 0, 0]
-        }
-        mouse_map = {
-            'i': [1, 0], 'k': [-1, 0],
-            'j': [0, -1], 'l': [0, 1], 'u': [0, 0]
-        }
-
-        keyboard = action_data.get('keyboard', 'q').lower()
-        mouse = action_data.get('mouse', 'u').lower()
-
-        return {
-            'keyboard': keyboard_map.get(keyboard, [0, 0, 0, 0]),
-            'mouse': mouse_map.get(mouse, [0, 0])
-        }
-
     def stop(self):
-        """Stop inference."""
         self.should_stop = True
+        self.stop_speculation.set()
 
 
-# Global engine instance
-engine: Optional[SpeculativeInferenceEngine] = None
+# Global engine
+inference_engine: Optional[SpeculativeInferenceEngine] = None
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -576,6 +906,30 @@ async def get_asset(filename: str):
     return FileResponse(f"web_ui/assets/{filename}")
 
 
+@app.get("/api/status")
+async def get_status():
+    return {
+        "ready": inference_engine is not None,
+        "running": inference_engine.is_running if inference_engine else False,
+        "mode": inference_engine.mode if inference_engine else None,
+        "speculative": True
+    }
+
+
+@app.get("/api/images")
+async def list_images():
+    images = []
+    demo_dir = "demo_images"
+    if os.path.exists(demo_dir):
+        for subdir in os.listdir(demo_dir):
+            subdir_path = os.path.join(demo_dir, subdir)
+            if os.path.isdir(subdir_path):
+                for img in os.listdir(subdir_path):
+                    if img.endswith(('.png', '.jpg', '.jpeg')):
+                        images.append(f"{demo_dir}/{subdir}/{img}")
+    return {"images": images}
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -586,62 +940,68 @@ async def websocket_endpoint(websocket: WebSocket):
             msg_type = data.get("type")
 
             if msg_type == "start":
-                img_path = data.get("image", "assets/example.png")
-                asyncio.create_task(engine.run_inference(img_path, websocket))
+                img_input = data.get("image", "demo_images/universal/0000.png")
+                if inference_engine and not inference_engine.is_running:
+                    asyncio.create_task(
+                        inference_engine.run_inference(img_input, websocket))
+                else:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Engine not ready or already running"
+                    })
 
             elif msg_type == "action":
-                await engine.action_queue.put(data)
+                if inference_engine and inference_engine.is_running:
+                    await inference_engine.action_queue.put(data)
 
             elif msg_type == "stop":
-                engine.stop()
-                await engine.action_queue.put(None)
-                await websocket.send_json({"type": "stopped"})
+                if inference_engine:
+                    inference_engine.stop()
+                    await inference_engine.action_queue.put(None)
+                    await websocket.send_json({"type": "stopped"})
 
     except WebSocketDisconnect:
-        print("Client disconnected")
-        engine.stop()
+        if inference_engine:
+            inference_engine.stop()
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        if inference_engine:
+            inference_engine.stop()
 
 
-def main():
-    global engine
-
+def parse_args():
     parser = argparse.ArgumentParser(description="Speculative Multi-GPU Web Server")
-    parser.add_argument("--config_path", type=str, required=True)
-    parser.add_argument("--checkpoint_path", type=str, default=None)
-    parser.add_argument("--pretrained_model_path", type=str, required=True)
+    parser.add_argument("--config_path", type=str,
+                        default="configs/inference_yaml/inference_universal.yaml")
+    parser.add_argument("--checkpoint_path", type=str, required=True)
+    parser.add_argument("--pretrained_model_path", type=str, default="Matrix-Game-2.0")
+    parser.add_argument("--max_num_output_frames", type=int, default=360)
+    parser.add_argument("--max_blocks", type=int, default=999999)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--host", type=str, default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8888)
-    parser.add_argument("--max_blocks", type=int, default=None)
-    parser.add_argument("--max_num_output_frames", type=int, default=15)
+    parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--fast", action="store_true",
-                        help="Use 2 denoising steps instead of 3 for faster inference")
+                        help="Use 2 denoising steps instead of 3 (~33% speedup)")
+    return parser.parse_args()
 
-    args = parser.parse_args()
+
+if __name__ == "__main__":
+    args = parse_args()
+    set_seed(args.seed)
 
     print(f"Available GPUs: {torch.cuda.device_count()}")
     for i in range(torch.cuda.device_count()):
-        print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+        props = torch.cuda.get_device_properties(i)
+        print(f"  GPU {i}: {props.name} ({props.total_memory // 1024**3}GB)")
 
-    config = OmegaConf.load(args.config_path)
-
-    # --fast flag: use 2 denoising steps instead of 3
-    if args.fast:
-        print("[fast mode] Using 2 denoising steps (was 3)")
-        config.denoising_step_list = [1000, 500]
-
-    set_seed(config.seed)
-
-    engine = SpeculativeInferenceEngine(args, config)
+    print("\nInitializing speculative inference engine...")
+    inference_engine = SpeculativeInferenceEngine(args)
 
     import uvicorn
-    print(f"Starting speculative server at http://{args.host}:{args.port}")
+    print(f"\nStarting speculative server at http://{args.host}:{args.port}")
     uvicorn.run(
         app,
         host=args.host,
         port=args.port,
         ws_max_size=50 * 1024 * 1024
     )
-
-
-if __name__ == "__main__":
-    main()
