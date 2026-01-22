@@ -24,6 +24,7 @@ Worlds that never were and never will be again. Each moment rendered from though
 | Single GPU | 1 | 24GB+ | Basic usage |
 | Speculative | 2 | 24GB each | Interactive (same-key sequences) |
 | Tensor Parallel | 2-4 | 16GB+ each | Lower latency |
+| TP+Speculative | 4-8 | 16GB+ each | Best of both (lowest latency + speculation) |
 
 ## Installation
 
@@ -111,6 +112,24 @@ uv run torchrun --nproc_per_node=2 web_server_tensor_parallel.py \
     --port 8888 --fast
 ```
 
+### TP+Speculative Hybrid (4+ GPUs)
+
+Combines tensor parallelism with speculative pipelining for the best performance. GPUs are split evenly:
+- First half: Primary TP group (generates current block)
+- Second half: Speculative TP group (pre-generates next block)
+
+```bash
+# 4 GPUs: 2 for primary TP, 2 for speculative TP
+uv run python launch_tp_speculative.py --num_gpus 4 \
+    --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
+    --port 8888 --fast
+
+# 6 GPUs: 3 for primary TP, 3 for speculative TP
+uv run python launch_tp_speculative.py --num_gpus 6 \
+    --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
+    --port 8888 --fast
+```
+
 ## Performance
 
 | Hardware | Time per block | Effective FPS |
@@ -120,6 +139,8 @@ uv run torchrun --nproc_per_node=2 web_server_tensor_parallel.py \
 | 2x A100 speculative | ~0.1-1.5s | ~10-25* |
 | 2x A100 tensor parallel | ~1.3s | ~9 |
 | 4x A100 tensor parallel | ~0.9s | ~13 |
+| 4x A100 TP+speculative | ~0.1-0.9s | ~15-30* |
+| 6x A100 TP+speculative | ~0.1-0.7s | ~18-35* |
 | 1x B200 | ~0.8-1.0s | ~12-15 |
 | 1x B200 + `--fast` | ~0.5-0.7s | ~17-20 |
 
