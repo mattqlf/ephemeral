@@ -48,24 +48,12 @@ else
   USE_B200_CONFIG=false
 fi
 
-# Select flash-attn wheel based on configuration
-# Official wheels from: https://github.com/Dao-AILab/flash-attention/releases
-# Detect CXX11 ABI setting from PyTorch
-CXX11_ABI="FALSE"
-if [[ -n "$TORCH_VERSION" ]]; then
-  CXX11_ABI=$(python3 -c "import torch; print('TRUE' if torch._C._GLIBCXX_USE_CXX11_ABI else 'FALSE')" 2>/dev/null || echo "FALSE")
-  echo "Detected CXX11 ABI: $CXX11_ABI"
-fi
-
-if [[ "$USE_B200_CONFIG" == true ]]; then
-  # PyTorch 2.8 wheels from official Dao-AILab releases
-  FLASH_ATTN_WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abi${CXX11_ABI}-cp${PYTHON_VERSION//./}-cp${PYTHON_VERSION//./}-linux_x86_64.whl"
-else
-  # Standard config: PyTorch 2.5 + CUDA 12 + Python 3.10
+# Select flash-attn wheel for standard config only
+# B200 config builds from source due to ABI compatibility issues with pre-built wheels
+if [[ "$USE_B200_CONFIG" != true ]]; then
   FLASH_ATTN_WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.5cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"
+  echo "Flash-attn wheel: $FLASH_ATTN_WHEEL"
 fi
-
-echo "Flash-attn wheel: $FLASH_ATTN_WHEEL"
 
 # Remove stale lockfile (may contain old flash-attn reference)
 rm -f uv.lock
@@ -80,11 +68,6 @@ if [[ "$USE_B200_CONFIG" == true ]]; then
   # Install PyTorch with sm_100 (Blackwell) support from official index
   echo "Installing PyTorch 2.8.0 with Blackwell (sm_100) support..."
   uv pip install torch==2.8.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-
-  # Re-detect CXX11 ABI after installing PyTorch
-  CXX11_ABI=$(uv run python -c "import torch; print('TRUE' if torch._C._GLIBCXX_USE_CXX11_ABI else 'FALSE')" 2>/dev/null || echo "FALSE")
-  echo "Detected CXX11 ABI: $CXX11_ABI"
-  FLASH_ATTN_WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abi${CXX11_ABI}-cp${PYTHON_VERSION//./}-cp${PYTHON_VERSION//./}-linux_x86_64.whl"
 
   # Install dependencies
   echo "Installing dependencies..."
@@ -122,11 +105,12 @@ if [[ "$USE_B200_CONFIG" == true ]]; then
     "uvicorn[standard]" \
     "wandb"
 
-  echo "Installing flash-attn (pre-built wheel for PyTorch 2.8)..."
-  uv pip install "$FLASH_ATTN_WHEEL"
+  # Build flash-attn from source for guaranteed ABI compatibility
+  echo "Installing build dependencies for flash-attn..."
+  uv pip install ninja packaging setuptools
 
-  echo "Installing setuptools (required for torch.compile)..."
-  uv pip install setuptools
+  echo "Building flash-attn from source (this takes 5-10 minutes)..."
+  MAX_JOBS=4 uv pip install flash-attn --no-build-isolation
 
   echo "Installing hf_transfer (for fast model downloads)..."
   uv pip install hf_transfer
@@ -148,13 +132,26 @@ else
   uv pip install hf_transfer
 fi
 
+# Install scipy (needed by LingBot-World cam_utils)
+echo "Installing scipy..."
+uv pip install scipy
+
 # Download model weights
 WEIGHTS_DIR="Matrix-Game-2.0"
 if [[ -d "$WEIGHTS_DIR" && -n "$(ls -A "$WEIGHTS_DIR" 2>/dev/null)" ]]; then
-  echo "Model weights already exist, skipping download."
+  echo "Matrix-Game weights already exist, skipping download."
 else
-  echo "Downloading model weights (~30GB)..."
+  echo "Downloading Matrix-Game weights (~30GB)..."
   uv run huggingface-cli download Skywork/Matrix-Game-2.0 --local-dir "$WEIGHTS_DIR"
+fi
+
+# Download LingBot-World weights
+LINGBOT_DIR="lingbot-world-base-cam"
+if [[ -d "$LINGBOT_DIR" && -n "$(ls -A "$LINGBOT_DIR" 2>/dev/null)" ]]; then
+  echo "LingBot-World weights already exist, skipping download."
+else
+  echo "Downloading LingBot-World weights..."
+  uv run huggingface-cli download Wan-AI/Wan2.1-I2V-14B-720P-Camera --local-dir "$LINGBOT_DIR"
 fi
 
 echo ""
@@ -163,7 +160,7 @@ echo "Setup complete!"
 echo "============================================"
 echo ""
 
-echo "To run the web UI (recommended):"
+echo "Dream v1 (Matrix-Game) - real-time, 1 GPU:"
 echo ""
 echo "  uv run python web_server.py \\"
 echo "      --config_path configs/inference_yaml/inference_universal.yaml \\"
@@ -171,7 +168,14 @@ echo "      --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.
 echo "      --pretrained_model_path Matrix-Game-2.0 \\"
 echo "      --port 8888"
 echo ""
-echo "Or run CLI mode:"
+echo "Dream v2 (LingBot-World) - chunk-based, 4 GPUs:"
+echo ""
+echo "  uv run python launch_lingbot.py \\"
+echo "      --num_gpus 4 \\"
+echo "      --ckpt_dir lingbot-world-base-cam \\"
+echo "      --port 8889"
+echo ""
+echo "Or run CLI mode (Matrix-Game):"
 echo ""
 echo "  uv run python inference_streaming.py \\"
 echo "      --config_path configs/inference_yaml/inference_universal.yaml \\"

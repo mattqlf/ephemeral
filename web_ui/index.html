@@ -40,7 +40,7 @@
         .bg-image {
             position: fixed;
             inset: 0;
-            background: url('/assets/hero.png') center/60% no-repeat;
+            background: url('assets/hero.png') center/60% no-repeat;
             opacity: 0.35;
             image-rendering: pixelated;
         }
@@ -139,12 +139,20 @@
             color: var(--accent);
         }
 
+        .cta-group {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
         .cta {
             display: inline-flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 8px;
-            padding: 12px 32px;
+            gap: 6px;
+            padding: 16px 28px;
             background: transparent;
             border: 1px solid var(--text-dim);
             color: var(--text);
@@ -153,12 +161,19 @@
             letter-spacing: 0.15em;
             text-transform: uppercase;
             transition: all 0.2s ease;
+            min-width: 200px;
         }
 
         .cta:hover {
             border-color: var(--accent);
             color: var(--accent);
             box-shadow: 0 0 20px rgba(0, 212, 170, 0.2);
+        }
+
+        .cta.cta-lingbot:hover {
+            border-color: #7b61ff;
+            color: #7b61ff;
+            box-shadow: 0 0 20px rgba(123, 97, 255, 0.2);
         }
 
         .cta::before {
@@ -169,6 +184,18 @@
 
         .cta:hover::before {
             opacity: 1;
+        }
+
+        .cta-sub {
+            font-size: 8px;
+            color: var(--text-dim);
+            letter-spacing: 0.1em;
+            text-transform: none;
+        }
+
+        .cta:hover .cta-sub {
+            color: inherit;
+            opacity: 0.7;
         }
 
         /* Blinking cursor */
@@ -205,9 +232,16 @@
                 <span>></span> lasting for a very short time
             </div>
 
-            <a href="app.html" class="cta">
-                Enter<span class="cursor"></span>
-            </a>
+            <div class="cta-group">
+                <a href="app.html" class="cta">
+                    Dream v1<span class="cursor"></span>
+                    <span class="cta-sub">Real-time interactive worlds</span>
+                </a>
+                <a href="lingbot.html" class="cta cta-lingbot">
+                    Dream v2
+                    <span class="cta-sub">Camera-controlled simulation</span>
+                </a>
+            </div>
         </div>
     </div>
 </body>

@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ephemeral - Dream v2</title>
+    <style>
+        @font-face {
+            font-family: 'Pixel';
+            src: url('https://fonts.cdnfonts.com/s/75325/PressStart2P-Regular.woff') format('woff');
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg: #0a0a0a;
+            --bg-panel: rgba(10, 10, 10, 0.85);
+            --text: #e0e0e0;
+            --text-dim: #4a4a4a;
+            --text-muted: #333;
+            --accent: #7b61ff;
+            --accent-glow: rgba(123, 97, 255, 0.25);
+            --border: #1a1a1a;
+            --border-light: #2a2a2a;
+        }
+
+        html, body {
+            height: 100%;
+            overflow: hidden;
+        }
+
+        body {
+            font-family: 'Courier New', monospace;
+            background: var(--bg);
+            color: var(--text);
+        }
+
+        .app {
+            display: grid;
+            grid-template-columns: 1fr 280px;
+            grid-template-rows: auto 1fr;
+            height: 100vh;
+        }
+
+        /* Header */
+        header {
+            grid-column: 1 / -1;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .logo {
+            font-family: 'Pixel', 'Courier New', monospace;
+            font-size: 12px;
+            letter-spacing: 0.1em;
+            text-decoration: none;
+            color: var(--text);
+            text-transform: uppercase;
+        }
+
+        .logo:hover { color: var(--accent); }
+
+        .logo-sub {
+            font-family: 'Courier New', monospace;
+            font-size: 9px;
+            color: var(--accent);
+            margin-left: 8px;
+            letter-spacing: 0.05em;
+        }
+
+        .header-meta {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            font-size: 10px;
+            color: var(--text-dim);
+            letter-spacing: 0.05em;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            font-size: 10px;
+            color: var(--text-dim);
+            border: 1px solid var(--border);
+        }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            background: var(--text-dim);
+        }
+
+        .status-dot.connected { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+        .status-dot.waiting { background: var(--accent); animation: blink 1s step-end infinite; }
+        .status-dot.error { background: #ff4444; }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        /* Video section */
+        .video-section {
+            background: var(--bg);
+            display: flex;
+            flex-direction: column;
+            padding: 16px;
+            gap: 12px;
+        }
+
+        .video-container {
+            flex: 1;
+            background: #000;
+            border: 1px solid var(--border);
+            position: relative;
+            min-height: 0;
+        }
+
+        #videoCanvas {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            max-width: 100%;
+            max-height: 100%;
+            image-rendering: auto;
+        }
+
+        .video-overlay {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 10px 14px;
+            background: linear-gradient(transparent, rgba(0,0,0,0.9));
+            font-size: 10px;
+            color: var(--text-dim);
+            letter-spacing: 0.05em;
+        }
+
+        /* Image + prompt bar */
+        .input-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+        }
+
+        .input-bar-label {
+            font-size: 9px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            white-space: nowrap;
+        }
+
+        .image-tabs {
+            display: flex;
+        }
+
+        .tab-btn {
+            padding: 5px 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 9px;
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            transition: all 0.15s;
+        }
+
+        .tab-btn:first-child { border-right: none; }
+        .tab-btn:hover { border-color: var(--border-light); color: var(--text); }
+        .tab-btn.active { background: var(--border); color: var(--text); }
+
+        .image-select-wrapper { flex-shrink: 0; }
+
+        .image-select-wrapper select,
+        .prompt-input {
+            padding: 6px 10px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-family: 'Courier New', monospace;
+            font-size: 10px;
+            outline: none;
+            color-scheme: dark;
+        }
+
+        .prompt-input {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .prompt-input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .upload-inline {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .upload-inline.active { display: flex; }
+
+        .upload-btn {
+            padding: 6px 12px;
+            background: transparent;
+            border: 1px dashed var(--border-light);
+            color: var(--text-dim);
+            font-family: 'Courier New', monospace;
+            font-size: 10px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .upload-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+        .upload-preview {
+            display: none;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .upload-preview.active { display: flex; }
+
+        .upload-preview img {
+            width: 40px;
+            height: 22px;
+            object-fit: cover;
+            border: 1px solid var(--border);
+        }
+
+        .upload-preview-name {
+            font-size: 10px;
+            color: var(--text-dim);
+            max-width: 100px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .upload-remove {
+            padding: 4px;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+
+        .upload-remove:hover { color: #ff4444; }
+
+        #fileInput { display: none; }
+
+        /* Control panel */
+        .control-panel {
+            background: var(--bg-panel);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            padding: 16px;
+            gap: 14px;
+            overflow-y: auto;
+        }
+
+        .section-title {
+            font-size: 9px;
+            color: #777;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 8px;
+        }
+
+        .section-title span { color: var(--accent); }
+
+        /* Direction buttons */
+        .direction-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 4px;
+            max-width: 200px;
+            margin: 0 auto;
+        }
+
+        .dir-key {
+            aspect-ratio: 1.2;
+            background: #151515;
+            border: 1px solid #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 500;
+            color: #999;
+            cursor: pointer;
+            transition: all 0.1s;
+            gap: 2px;
+        }
+
+        .dir-key:hover:not(.empty):not(.disabled) {
+            border-color: #555;
+            color: var(--text);
+            background: #1a1a1a;
+        }
+
+        .dir-key.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #fff;
+        }
+
+        .dir-key.empty { visibility: hidden; }
+        .dir-key.disabled { opacity: 0.35; pointer-events: none; }
+
+        .dir-hint {
+            font-size: 7px;
+            color: #666;
+            text-transform: uppercase;
+        }
+
+        .dir-key.active .dir-hint { color: rgba(255,255,255,0.8); }
+
+        /* Settings */
+        .setting-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .setting-label {
+            font-size: 9px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .setting-value {
+            font-size: 10px;
+            color: var(--text);
+            min-width: 30px;
+            text-align: right;
+        }
+
+        .setting-row select,
+        .setting-row input[type="range"] {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-family: 'Courier New', monospace;
+            font-size: 10px;
+            outline: none;
+            color-scheme: dark;
+        }
+
+        .setting-row select {
+            padding: 4px 6px;
+            flex: 1;
+            min-width: 0;
+        }
+
+        .setting-row input[type="range"] {
+            flex: 1;
+            min-width: 0;
+            height: 4px;
+            accent-color: var(--accent);
+        }
+
+        /* Progress bar */
+        .progress-container {
+            display: none;
+        }
+
+        .progress-container.active { display: block; }
+
+        .progress-bar-bg {
+            height: 4px;
+            background: var(--border);
+            margin-top: 6px;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: var(--accent);
+            width: 0%;
+            transition: width 0.3s;
+        }
+
+        .progress-label {
+            font-size: 9px;
+            color: var(--text-dim);
+            margin-top: 4px;
+        }
+
+        /* Buttons */
+        .action-buttons {
+            display: flex;
+            gap: 6px;
+            margin-top: auto;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 10px 14px;
+            font-family: 'Courier New', monospace;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            border: 1px solid var(--border-light);
+            background: transparent;
+            color: var(--text);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .btn:hover:not(:disabled) { background: var(--text); color: var(--bg); }
+        .btn:disabled { opacity: 0.3; pointer-events: none; }
+
+        .btn-primary {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #fff;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #8f77ff;
+            border-color: #8f77ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <header>
+            <div style="display:flex;align-items:baseline;">
+                <a href="/" class="logo">Ephemeral</a>
+                <span class="logo-sub">Dream v2</span>
+            </div>
+
+            <div class="header-meta">
+                <span>Chunk: <strong id="chunkNum">0</strong></span>
+                <span id="resLabel">832x480</span>
+            </div>
+
+            <div class="status-badge">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Connecting...</span>
+            </div>
+        </header>
+
+        <div class="video-section">
+            <div class="video-container">
+                <canvas id="videoCanvas" width="832" height="480"></canvas>
+                <div class="video-overlay">
+                    <span id="overlayText">> waiting...</span>
+                </div>
+            </div>
+
+            <div class="input-bar">
+                <span class="input-bar-label">Image</span>
+                <div class="image-tabs">
+                    <button class="tab-btn active" data-tab="preset">Preset</button>
+                    <button class="tab-btn" data-tab="upload">Upload</button>
+                </div>
+                <div class="image-select-wrapper" id="presetTab">
+                    <select id="presetSelect">
+                        <option value="interactive">Interactive</option>
+                    </select>
+                </div>
+                <div class="upload-inline" id="uploadTab">
+                    <button class="upload-btn" id="uploadBtn">> drop or select</button>
+                    <div class="upload-preview" id="uploadPreview">
+                        <img id="previewImg" src="" alt="">
+                        <span class="upload-preview-name" id="previewName"></span>
+                        <button class="upload-remove" id="removeUpload">&times;</button>
+                    </div>
+                </div>
+                <input type="file" id="fileInput" accept="image/*">
+
+                <span class="input-bar-label" style="margin-left:8px;">Prompt</span>
+                <input type="text" class="prompt-input" id="promptInput"
+                       placeholder="Describe the scene...">
+            </div>
+        </div>
+
+        <div class="control-panel">
+            <div>
+                <div class="section-title"><span>></span> Camera Direction</div>
+                <div class="direction-grid" id="directionGrid">
+                    <div class="dir-key empty"></div>
+                    <div class="dir-key disabled" data-dir="forward"><span>W</span><span class="dir-hint">fwd</span></div>
+                    <div class="dir-key empty"></div>
+                    <div class="dir-key disabled" data-dir="left"><span>A</span><span class="dir-hint">left</span></div>
+                    <div class="dir-key disabled" data-dir="none"><span>-</span><span class="dir-hint">none</span></div>
+                    <div class="dir-key disabled" data-dir="right"><span>D</span><span class="dir-hint">right</span></div>
+                    <div class="dir-key disabled" data-dir="backward"><span>S</span><span class="dir-hint">back</span></div>
+                    <div class="dir-key disabled" data-dir="up"><span>R</span><span class="dir-hint">up</span></div>
+                    <div class="dir-key disabled" data-dir="down"><span>F</span><span class="dir-hint">down</span></div>
+                </div>
+            </div>
+
+            <div>
+                <div class="section-title"><span>></span> Settings</div>
+
+                <div class="setting-row" style="margin-bottom:8px;">
+                    <span class="setting-label">Camera Path</span>
+                    <select id="cameraMode">
+                        <option value="interactive">Interactive</option>
+                    </select>
+                </div>
+
+                <div class="setting-row" style="margin-bottom:8px;">
+                    <span class="setting-label">Steps</span>
+                    <input type="range" id="stepsSlider" min="15" max="50" value="25">
+                    <span class="setting-value" id="stepsValue">25</span>
+                </div>
+
+                <div class="setting-row" style="margin-bottom:8px;">
+                    <span class="setting-label">Resolution</span>
+                    <select id="resSelect">
+                        <option value="480*832">480p (832x480)</option>
+                        <option value="720*1280">720p (1280x720)</option>
+                    </select>
+                </div>
+
+                <div class="setting-row">
+                    <span class="setting-label">Chunks</span>
+                    <input type="range" id="chunksSlider" min="1" max="30" value="10">
+                    <span class="setting-value" id="chunksValue">10</span>
+                </div>
+            </div>
+
+            <div class="progress-container" id="progressContainer">
+                <div class="section-title"><span>></span> Progress</div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar" id="progressBar"></div>
+                </div>
+                <div class="progress-label" id="progressLabel">Step 0/0</div>
+            </div>
+
+            <div class="action-buttons">
+                <button class="btn btn-primary" id="startBtn" disabled>> Start</button>
+                <button class="btn" id="stopBtn" disabled>Stop</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('videoCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const chunkNum = document.getElementById('chunkNum');
+        const overlayText = document.getElementById('overlayText');
+        const resLabel = document.getElementById('resLabel');
+
+        const presetSelect = document.getElementById('presetSelect');
+        const cameraMode = document.getElementById('cameraMode');
+        const stepsSlider = document.getElementById('stepsSlider');
+        const stepsValue = document.getElementById('stepsValue');
+        const chunksSlider = document.getElementById('chunksSlider');
+        const chunksValue = document.getElementById('chunksValue');
+        const resSelect = document.getElementById('resSelect');
+        const promptInput = document.getElementById('promptInput');
+
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+
+        const directionGrid = document.getElementById('directionGrid');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const progressLabel = document.getElementById('progressLabel');
+
+        const tabBtns = document.querySelectorAll('.tab-btn');
+        const presetTab = document.getElementById('presetTab');
+        const uploadTab = document.getElementById('uploadTab');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const fileInput = document.getElementById('fileInput');
+        const uploadPreview = document.getElementById('uploadPreview');
+        const previewImg = document.getElementById('previewImg');
+        const previewName = document.getElementById('previewName');
+        const removeUpload = document.getElementById('removeUpload');
+
+        let ws = null;
+        let isRunning = false;
+        let waitingForAction = false;
+        let uploadedImageData = null;
+
+        const DIR_KEYS = { w: 'forward', s: 'backward', a: 'left', d: 'right', r: 'up', f: 'down', ' ': 'none' };
+
+        // Tabs
+        tabBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                tabBtns.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                if (btn.dataset.tab === 'preset') {
+                    presetTab.style.display = 'block';
+                    uploadTab.classList.remove('active');
+                } else {
+                    presetTab.style.display = 'none';
+                    uploadTab.classList.add('active');
+                }
+            });
+        });
+
+        // Upload
+        uploadBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files[0]) handleUpload(e.target.files[0]);
+        });
+        uploadBtn.addEventListener('dragover', (e) => { e.preventDefault(); uploadBtn.style.borderColor = 'var(--accent)'; });
+        uploadBtn.addEventListener('dragleave', () => { uploadBtn.style.borderColor = ''; });
+        uploadBtn.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadBtn.style.borderColor = '';
+            if (e.dataTransfer.files[0]?.type.startsWith('image/')) handleUpload(e.dataTransfer.files[0]);
+        });
+
+        document.addEventListener('paste', (e) => {
+            for (const item of e.clipboardData?.items || []) {
+                if (item.type.startsWith('image/')) {
+                    tabBtns.forEach(b => b.classList.remove('active'));
+                    document.querySelector('[data-tab="upload"]').classList.add('active');
+                    presetTab.style.display = 'none';
+                    uploadTab.classList.add('active');
+                    handleUpload(item.getAsFile());
+                    break;
+                }
+            }
+        });
+
+        function handleUpload(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                uploadedImageData = e.target.result;
+                previewImg.src = uploadedImageData;
+                previewName.textContent = file.name;
+                uploadBtn.style.display = 'none';
+                uploadPreview.classList.add('active');
+            };
+            reader.readAsDataURL(file);
+        }
+
+        removeUpload.addEventListener('click', () => {
+            uploadedImageData = null;
+            fileInput.value = '';
+            uploadPreview.classList.remove('active');
+            uploadBtn.style.display = '';
+        });
+
+        // Sliders
+        stepsSlider.addEventListener('input', () => { stepsValue.textContent = stepsSlider.value; });
+        chunksSlider.addEventListener('input', () => { chunksValue.textContent = chunksSlider.value; });
+        resSelect.addEventListener('change', () => {
+            const parts = resSelect.value.split('*');
+            const w = parseInt(parts[1]), h = parseInt(parts[0]);
+            canvas.width = w;
+            canvas.height = h;
+            resLabel.textContent = `${w}x${h}`;
+            resizeCanvas();
+        });
+
+        // Direction buttons
+        function setDirectionsEnabled(enabled) {
+            waitingForAction = enabled;
+            directionGrid.querySelectorAll('.dir-key:not(.empty)').forEach(k => {
+                k.classList.toggle('disabled', !enabled);
+            });
+        }
+
+        function sendDirection(dir) {
+            if (!waitingForAction || !ws || ws.readyState !== WebSocket.OPEN) return;
+            ws.send(JSON.stringify({ type: 'action', direction: dir }));
+            setDirectionsEnabled(false);
+            overlayText.textContent = `> direction: ${dir} - generating...`;
+
+            // Flash button
+            const el = directionGrid.querySelector(`[data-dir="${dir}"]`);
+            if (el) { el.classList.add('active'); setTimeout(() => el.classList.remove('active'), 300); }
+        }
+
+        directionGrid.querySelectorAll('.dir-key').forEach(el => {
+            el.addEventListener('click', () => {
+                if (el.classList.contains('disabled') || el.classList.contains('empty')) return;
+                sendDirection(el.dataset.dir);
+            });
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+            const dir = DIR_KEYS[e.key.toLowerCase()];
+            if (dir) sendDirection(dir);
+        });
+
+        // WebSocket
+        function connect() {
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${location.host}/ws`);
+            ws.onopen = () => { setStatus('Connected', 'connected'); startBtn.disabled = false; };
+            ws.onclose = () => { setStatus('Disconnected', 'error'); startBtn.disabled = stopBtn.disabled = true; isRunning = false; setTimeout(connect, 2000); };
+            ws.onerror = () => setStatus('Error', 'error');
+            ws.onmessage = (e) => handleMessage(JSON.parse(e.data));
+        }
+
+        function setStatus(text, state) {
+            statusText.textContent = text;
+            statusDot.className = 'status-dot ' + (state || '');
+        }
+
+        function handleMessage(msg) {
+            switch (msg.type) {
+                case 'frame':
+                    displayFrame(msg.data);
+                    chunkNum.textContent = msg.chunk;
+                    break;
+
+                case 'request_action':
+                    setStatus(`Chunk ${msg.chunk} - Pick direction`, 'waiting');
+                    overlayText.textContent = '> pick a camera direction...';
+                    setDirectionsEnabled(true);
+                    progressContainer.classList.remove('active');
+                    break;
+
+                case 'generating':
+                    setStatus(`Chunk ${msg.chunk} - Step ${msg.step}/${msg.total_steps}`, 'waiting');
+                    progressContainer.classList.add('active');
+                    progressBar.style.width = `${(msg.step / msg.total_steps) * 100}%`;
+                    progressLabel.textContent = `Step ${msg.step}/${msg.total_steps}`;
+                    overlayText.textContent = `> generating chunk ${msg.chunk}... step ${msg.step}/${msg.total_steps}`;
+                    break;
+
+                case 'chunk_complete':
+                    setStatus(`Chunk ${msg.chunk} done`, 'connected');
+                    overlayText.textContent = `> chunk ${msg.chunk} complete`;
+                    progressContainer.classList.remove('active');
+                    break;
+
+                case 'complete':
+                case 'stopped':
+                    setStatus(msg.type === 'complete' ? 'Complete' : 'Stopped', 'connected');
+                    isRunning = false;
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    setDirectionsEnabled(false);
+                    progressContainer.classList.remove('active');
+                    overlayText.textContent = `> ${msg.type}`;
+                    break;
+
+                case 'error':
+                    setStatus('Error', 'error');
+                    isRunning = false;
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    setDirectionsEnabled(false);
+                    progressContainer.classList.remove('active');
+                    overlayText.textContent = `> error: ${msg.message}`;
+                    break;
+            }
+        }
+
+        function displayFrame(b64) {
+            const img = new Image();
+            img.onload = () => ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            img.src = 'data:image/jpeg;base64,' + b64;
+        }
+
+        // Start / Stop
+        startBtn.addEventListener('click', () => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+            isRunning = true;
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            setDirectionsEnabled(false);
+            overlayText.textContent = '> starting...';
+
+            const isUpload = document.querySelector('[data-tab="upload"]').classList.contains('active');
+            const cameraPreset = cameraMode.value;
+
+            ws.send(JSON.stringify({
+                type: 'start',
+                image: isUpload && uploadedImageData ? uploadedImageData : '',
+                prompt: promptInput.value,
+                camera_preset: cameraPreset,
+                steps: parseInt(stepsSlider.value),
+                size: resSelect.value,
+                num_chunks: parseInt(chunksSlider.value),
+            }));
+            setStatus('Starting...', 'waiting');
+        });
+
+        stopBtn.addEventListener('click', () => {
+            if (ws?.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'stop' }));
+                setStatus('Stopping...', 'waiting');
+            }
+        });
+
+        // Canvas resize
+        function resizeCanvas() {
+            const container = document.querySelector('.video-container');
+            const cw = container.clientWidth;
+            const ch = container.clientHeight;
+            const ar = canvas.width / canvas.height;
+            let w, h;
+            if (cw / ch > ar) {
+                h = ch; w = h * ar;
+            } else {
+                w = cw; h = w / ar;
+            }
+            canvas.style.width = w + 'px';
+            canvas.style.height = h + 'px';
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+
+        // Load presets
+        async function loadPresets() {
+            try {
+                const res = await fetch('/api/presets');
+                const data = await res.json();
+                data.presets.forEach(p => {
+                    const opt1 = document.createElement('option');
+                    opt1.value = p.name;
+                    opt1.textContent = `Example ${p.name} (${p.frames} frames)`;
+                    presetSelect.appendChild(opt1);
+
+                    const opt2 = document.createElement('option');
+                    opt2.value = p.name;
+                    opt2.textContent = `Preset: ${p.name}`;
+                    cameraMode.appendChild(opt2);
+                });
+            } catch (e) { console.error(e); }
+        }
+
+        // Sync preset selector with camera mode
+        presetSelect.addEventListener('change', () => {
+            cameraMode.value = presetSelect.value;
+        });
+        cameraMode.addEventListener('change', () => {
+            presetSelect.value = cameraMode.value;
+            // Disable direction buttons when using a preset (non-interactive)
+            const isPreset = cameraMode.value !== 'interactive';
+            if (isPreset) setDirectionsEnabled(false);
+        });
+
+        loadPresets();
+        resizeCanvas();
+        connect();
+    </script>
+</body>
+</html>

@@ -595,6 +595,12 @@ async def get_app():
     return FileResponse("web_ui/app.html")
 
 
+@app.get("/lingbot.html", response_class=HTMLResponse)
+async def get_lingbot():
+    """Serve the LingBot page (links to separate server)."""
+    return FileResponse("web_ui/lingbot.html")
+
+
 @app.get("/assets/{filename}")
 async def get_asset(filename: str):
     """Serve static assets from web_ui/assets/."""
