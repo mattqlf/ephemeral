@@ -151,7 +151,7 @@ if [[ -d "$LINGBOT_DIR" && -n "$(ls -A "$LINGBOT_DIR" 2>/dev/null)" ]]; then
   echo "LingBot-World weights already exist, skipping download."
 else
   echo "Downloading LingBot-World weights..."
-  uv run huggingface-cli download Wan-AI/Wan2.1-I2V-14B-720P-Camera --local-dir "$LINGBOT_DIR"
+  uv run huggingface-cli download robbyant/lingbot-world-base-cam --local-dir "$LINGBOT_DIR"
 fi
 
 echo ""
@@ -168,11 +168,12 @@ echo "      --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.
 echo "      --pretrained_model_path Matrix-Game-2.0 \\"
 echo "      --port 8888"
 echo ""
-echo "Dream v2 (LingBot-World) - chunk-based, 4 GPUs:"
+echo "Dream v2 (LingBot-World) - chunk-based, 8 GPUs:"
 echo ""
 echo "  uv run python launch_lingbot.py \\"
-echo "      --num_gpus 4 \\"
+echo "      --num_gpus 8 \\"
 echo "      --ckpt_dir lingbot-world-base-cam \\"
+echo "      --dit_fsdp --t5_fsdp \\"
 echo "      --port 8889"
 echo ""
 echo "Or run CLI mode (Matrix-Game):"

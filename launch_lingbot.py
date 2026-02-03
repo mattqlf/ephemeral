@@ -6,17 +6,17 @@ Launches the LingBot-World web server with multi-GPU support via torchrun.
 Uses FSDP + Ulysses sequence parallelism for distributed inference.
 
 Usage:
-    # 4-GPU with sequence parallelism (recommended)
-    uv run python launch_lingbot.py --num_gpus 4 \
-        --ckpt_dir lingbot-world-base-cam
+    # 8-GPU with FSDP + sequence parallelism (recommended)
+    uv run python launch_lingbot.py --num_gpus 8 \
+        --ckpt_dir lingbot-world-base-cam --dit_fsdp --t5_fsdp
 
-    # Single GPU (slower, no parallelism)
-    uv run python launch_lingbot.py --num_gpus 1 \
-        --ckpt_dir lingbot-world-base-cam
+    # 4-GPU
+    uv run python launch_lingbot.py --num_gpus 4 \
+        --ckpt_dir lingbot-world-base-cam --dit_fsdp --t5_fsdp
 
     # Custom port and resolution
-    uv run python launch_lingbot.py --num_gpus 4 \
-        --ckpt_dir lingbot-world-base-cam \
+    uv run python launch_lingbot.py --num_gpus 8 \
+        --ckpt_dir lingbot-world-base-cam --dit_fsdp --t5_fsdp \
         --port 8889 --size 720*1280
 """
 
@@ -31,19 +31,19 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    # 4-GPU with sequence parallelism
-    uv run python launch_lingbot.py --num_gpus 4 \\
-        --ckpt_dir lingbot-world-base-cam
+    # 8-GPU with FSDP (recommended)
+    uv run python launch_lingbot.py --num_gpus 8 \\
+        --ckpt_dir lingbot-world-base-cam --dit_fsdp --t5_fsdp
 
-    # Single GPU
-    uv run python launch_lingbot.py --num_gpus 1 \\
-        --ckpt_dir lingbot-world-base-cam
+    # 4-GPU
+    uv run python launch_lingbot.py --num_gpus 4 \\
+        --ckpt_dir lingbot-world-base-cam --dit_fsdp --t5_fsdp
         """
     )
 
     # Launcher arguments
-    parser.add_argument("--num_gpus", type=int, default=4,
-                        help="Number of GPUs (default: 4)")
+    parser.add_argument("--num_gpus", type=int, default=8,
+                        help="Number of GPUs (default: 8)")
     parser.add_argument("--master_port", type=str, default="29501",
                         help="Port for distributed communication (default: 29501)")
 
