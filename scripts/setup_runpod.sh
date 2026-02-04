@@ -13,11 +13,11 @@ fi
 # 1. Install Flash Attention from prebuilt wheel (CUDA 12.8, Torch 2.8, Python 3.12)
 FLASH_ATTN_WHEEL="https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3+cu128torch2.8-cp312-cp312-linux_x86_64.whl"
 echo "Installing Flash Attention from: $FLASH_ATTN_WHEEL"
-uv pip install --system "$FLASH_ATTN_WHEEL"
+uv pip install --system --break-system-packages "$FLASH_ATTN_WHEEL"
 
 # 2. Install remaining dependencies
 echo "Installing dependencies..."
-uv pip install --system \
+uv pip install --system --break-system-packages \
   "accelerate>=1.1.1" \
   "av" \
   "clip @ git+https://github.com/openai/CLIP.git" \
