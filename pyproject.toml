@@ -50,7 +50,6 @@ dependencies = [
   "wandb",
   "hf_transfer",
   "google-genai",
-  "python-dotenv",
   "httpx",
 ]
 

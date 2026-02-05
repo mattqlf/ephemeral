@@ -5,8 +5,7 @@ Run with: uv run python -m apps.servers.web_server --checkpoint_path Matrix-Game
 """
 
 import os
-from dotenv import load_dotenv
-load_dotenv()
+os.environ["GOOGLE_API_KEY"] = "AIzaSyBsBvyfplPcR3g503sehLCbkU5nLkSY05A"
 
 import io
 import asyncio
@@ -47,11 +46,15 @@ from utils.wan_wrapper import WanDiffusionWrapper
 from google import genai
 from google.genai import types as genai_types
 
+import anthropic
+from suno_api.client import SunoClient
+
 app = FastAPI(title="Matrix-Game 2.0 Web UI")
 logger = logging.getLogger("ephemeral.web")
 
 # Global state
 inference_engine: Optional["InferenceEngine"] = None
+suno_client: Optional[SunoClient] = None
 
 
 def _websocket_client_label(websocket: WebSocket) -> str:
@@ -347,6 +350,110 @@ class InferenceEngine:
         logger.info("[UI %s] Gemini generated image size=%s", client_label, generated.size)
         return generated
 
+    async def _generate_music(self, prompt: str, image: Image.Image, websocket, captcha_token: str = ""):
+        """Generate background music using Anthropic + Suno, running in the background."""
+        client_label = _websocket_client_label(websocket)
+        try:
+            await websocket.send_json({
+                "type": "music_status",
+                "message": "Generating music prompt..."
+            })
+
+            # Step 1: Call Anthropic to create a Suno music prompt
+            img_buffer = io.BytesIO()
+            image.save(img_buffer, format="JPEG", quality=80)
+            img_b64 = base64.b64encode(img_buffer.getvalue()).decode()
+
+            def _call_anthropic():
+                from suno_api.client import DEFAULT_ANTHROPIC_KEY
+                client = anthropic.Anthropic(
+                    api_key=os.environ.get("ANTHROPIC_API_KEY", DEFAULT_ANTHROPIC_KEY)
+                )
+                msg = client.messages.create(
+                    model="claude-sonnet-4-5-20250929",
+                    max_tokens=300,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/jpeg",
+                                    "data": img_b64,
+                                },
+                            },
+                            {
+                                "type": "text",
+                                "text": (
+                                    "You are creating a prompt for Suno AI to generate background music for a video game world. "
+                                    "Look at this game scene image"
+                                    + (f" (the player described it as: \"{prompt}\")" if prompt else "")
+                                    + ". Write a short Suno AI music generation prompt (2-3 sentences max) describing "
+                                    "the perfect looping background music for this game world. Focus on mood, genre, "
+                                    "instruments, tempo, and atmosphere. Make it instrumental. "
+                                    "Output ONLY the Suno prompt, nothing else."
+                                ),
+                            },
+                        ],
+                    }],
+                )
+                return msg.content[0].text.strip()
+
+            loop = asyncio.get_event_loop()
+            music_prompt = await loop.run_in_executor(None, _call_anthropic)
+            logger.info("[UI %s] Anthropic music prompt: %s", client_label, music_prompt)
+
+            await websocket.send_json({
+                "type": "music_status",
+                "message": f"Composing: {music_prompt[:60]}..."
+            })
+
+            # Step 2: Generate song with Suno
+            global suno_client
+            if not suno_client:
+                logger.warning("[UI %s] No Suno client configured, skipping music", client_label)
+                return
+
+            data = await suno_client.generate(
+                description=music_prompt + " Instrumental, loopable, video game background music.",
+                instrumental=True,
+                captcha_token=captcha_token,
+            )
+            clips = data.get("clips", [])
+            clip_ids = [c["id"] for c in clips]
+            logger.info("[UI %s] Suno generation started, clip_ids=%s", client_label, clip_ids)
+
+            await websocket.send_json({
+                "type": "music_status",
+                "message": "Waiting for music generation..."
+            })
+
+            # Step 3: Poll until songs are complete
+            songs = await suno_client.wait_for_songs(clip_ids, timeout=300)
+            audio_urls = [s.get("audio_url") for s in songs if s.get("audio_url")]
+
+            if audio_urls:
+                logger.info("[UI %s] Music ready: %s", client_label, audio_urls)
+                await websocket.send_json({
+                    "type": "music_ready",
+                    "audio_urls": audio_urls,
+                    "title": songs[0].get("title", ""),
+                    "prompt": music_prompt,
+                })
+            else:
+                logger.warning("[UI %s] Suno returned no audio URLs", client_label)
+
+        except Exception as e:
+            logger.exception("[UI %s] Music generation failed", client_label)
+            try:
+                await websocket.send_json({
+                    "type": "music_status",
+                    "message": f"Music generation failed: {str(e)[:100]}"
+                })
+            except Exception:
+                pass
+
     def _parse_action(self, action_data: dict) -> dict:
         """Parse action from WebSocket message to tensor format."""
         mode = self.mode
@@ -391,7 +498,7 @@ class InferenceEngine:
             result["mouse"] = mouse_cond
         return result
 
-    async def run_inference(self, img_input: str, websocket: WebSocket, prompt: str = None):
+    async def run_inference(self, img_input: str, websocket: WebSocket, prompt: str = None, captcha_token: str = ""):
         """Run inference loop with WebSocket streaming."""
         client_label = _websocket_client_label(websocket)
         run_started_at = time.perf_counter()
@@ -435,6 +542,10 @@ class InferenceEngine:
             # If prompt provided, generate new image with Gemini
             if prompt:
                 image = await self._generate_image_with_gemini(prompt, image, websocket)
+
+            # Kick off background music generation (non-blocking)
+            if captcha_token:
+                asyncio.create_task(self._generate_music(prompt or "", image, websocket, captcha_token))
 
             image = self._resizecrop(image, 352, 640)
             logger.info("[UI %s] Input image normalized to %s", client_label, image.size)
@@ -788,16 +899,18 @@ async def websocket_endpoint(websocket: WebSocket):
             if msg_type == "start":
                 img_input = data.get("image", "demo_images/universal/0000.png")
                 prompt = data.get("prompt", None)
+                captcha_token = data.get("captcha_token", "")
                 logger.info(
-                    "[WS %s] Start requested image_source=%s prompt=%s",
+                    "[WS %s] Start requested image_source=%s prompt=%s captcha=%s",
                     client_label,
                     "upload" if str(img_input).startswith("data:image") else "path",
                     "yes" if prompt else "no",
+                    "yes" if captcha_token else "no",
                 )
                 if inference_engine and not inference_engine.is_running:
                     try:
                         asyncio.create_task(
-                            inference_engine.run_inference(img_input, websocket, prompt=prompt))
+                            inference_engine.run_inference(img_input, websocket, prompt=prompt, captcha_token=captcha_token))
                         logger.info("[WS %s] Inference task created", client_label)
                     except Exception as e:
                         logger.exception("[WS %s] Failed to start inference task", client_label)
@@ -872,6 +985,10 @@ if __name__ == "__main__":
     # Initialize inference engine
     logger.info("Initializing inference engine...")
     inference_engine = InferenceEngine(args)
+
+    # Initialize Suno client (uses hardcoded default cookie if env var not set)
+    suno_client = SunoClient()
+    logger.info("Suno client initialized (music generation enabled)")
 
     # Create web_ui directory if needed
     os.makedirs("web_ui", exist_ok=True)

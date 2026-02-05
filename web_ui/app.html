@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ephemeral</title>
+    <script src="https://js.hcaptcha.com/1/api.js?render=explicit&host=suno.com&endpoint=https%3A%2F%2Fhcaptcha-endpoint-prod.suno.com&assethost=https%3A%2F%2Fhcaptcha-assets-prod.suno.com&imghost=https%3A%2F%2Fhcaptcha-imgs-prod.suno.com&reportapi=https%3A%2F%2Fhcaptcha-reportapi-prod.suno.com" async defer></script>
     <style>
         @font-face {
             font-family: 'Pixel';
@@ -446,6 +447,24 @@
         }
 
         /* Buttons */
+        .music-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            background: rgba(0, 212, 170, 0.05);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            margin-top: 6px;
+        }
+
+        .music-label {
+            font-family: 'Courier New', monospace;
+            font-size: 9px;
+            color: var(--accent);
+            opacity: 0.8;
+        }
+
         .action-buttons {
             display: flex;
             gap: 6px;
@@ -598,8 +617,15 @@
                 <button class="btn btn-primary" id="startBtn">> Start</button>
                 <button class="btn" id="stopBtn" disabled>Stop</button>
             </div>
+
+            <div class="music-bar" id="musicBar" style="display:none;">
+                <span class="music-label" id="musicLabel">music: waiting...</span>
+            </div>
         </div>
     </div>
+
+    <div id="hcaptcha-container" style="display:none;"></div>
+    <audio id="bgMusic" loop preload="none"></audio>
 
     <script>
         const canvas = document.getElementById('videoCanvas');
@@ -628,6 +654,37 @@
         const previewName = document.getElementById('previewName');
         const removeUpload = document.getElementById('removeUpload');
         const promptInput = document.getElementById('promptInput');
+        const bgMusic = document.getElementById('bgMusic');
+        const musicBar = document.getElementById('musicBar');
+        const musicLabel = document.getElementById('musicLabel');
+
+        // ── hCaptcha (invisible) for Suno music generation ──
+        const HCAPTCHA_SITEKEY = 'd65453de-3f1a-4aac-9366-a0f06e52b2ce';
+        let hcaptchaWidgetId = null;
+        let pendingCaptchaResolve = null;
+
+        function initHcaptcha() {
+            if (typeof hcaptcha === 'undefined') { setTimeout(initHcaptcha, 500); return; }
+            hcaptchaWidgetId = hcaptcha.render('hcaptcha-container', {
+                sitekey: HCAPTCHA_SITEKEY,
+                size: 'invisible',
+                endpoint: 'https://hcaptcha-endpoint-prod.suno.com',
+                'asset-host': 'https://hcaptcha-assets-prod.suno.com',
+                'img-host': 'https://hcaptcha-imgs-prod.suno.com',
+                'report-api': 'https://hcaptcha-reportapi-prod.suno.com',
+                callback: (token) => { if (pendingCaptchaResolve) { pendingCaptchaResolve(token); pendingCaptchaResolve = null; } },
+                'error-callback': () => { if (pendingCaptchaResolve) { pendingCaptchaResolve(''); pendingCaptchaResolve = null; } },
+            });
+        }
+        setTimeout(initHcaptcha, 1000);
+
+        function getCaptchaToken() {
+            return new Promise((resolve) => {
+                if (typeof hcaptcha === 'undefined' || hcaptchaWidgetId === null) { resolve(''); return; }
+                pendingCaptchaResolve = resolve;
+                hcaptcha.execute(hcaptchaWidgetId);
+            });
+        }
 
         let ws = null;
         let isRunning = false;
@@ -824,6 +881,19 @@
                 case 'error':
                     setStatus('Error', 'error'); isRunning = false;
                     startBtn.disabled = false; stopBtn.disabled = true; resetInputState(); break;
+                case 'music_status':
+                    musicBar.style.display = 'flex';
+                    musicLabel.textContent = `music: ${msg.message || '...'}`;
+                    break;
+                case 'music_ready':
+                    musicBar.style.display = 'flex';
+                    musicLabel.textContent = `music: ${msg.title || 'playing'}`;
+                    if (msg.audio_urls && msg.audio_urls.length > 0) {
+                        bgMusic.src = msg.audio_urls[0];
+                        bgMusic.volume = 0.4;
+                        bgMusic.play().catch(() => {});
+                    }
+                    break;
             }
         }
 
@@ -849,18 +919,30 @@
             });
         });
 
-        startBtn.addEventListener('click', () => {
+        startBtn.addEventListener('click', async () => {
             if (ws?.readyState === WebSocket.OPEN) {
                 isRunning = true; startBtn.disabled = true; stopBtn.disabled = false;
                 resetInputState();
+                bgMusic.pause(); bgMusic.src = '';
+                musicBar.style.display = 'none';
+
                 const prompt = promptInput.value.trim();
                 const isUpload = document.querySelector('[data-tab="upload"]').classList.contains('active');
                 const image = isUpload && uploadedImageData ? uploadedImageData : imageSelect.value;
                 const msg = { type: 'start', image };
+
                 if (prompt) {
                     msg.prompt = prompt;
                     inputDisplay.textContent = '> generating world with Gemini...';
                     setStatus('Generating image...', 'waiting');
+
+                    // Get hCaptcha token for Suno music generation
+                    musicBar.style.display = 'flex';
+                    musicLabel.textContent = 'music: solving captcha...';
+                    try {
+                        const captchaToken = await getCaptchaToken();
+                        if (captchaToken) msg.captcha_token = captchaToken;
+                    } catch (e) { console.warn('hCaptcha failed:', e); }
                 } else {
                     inputDisplay.textContent = '> starting...';
                     setStatus('Starting...', 'waiting');
@@ -873,6 +955,7 @@
             if (ws?.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'stop' }));
                 setStatus('Stopping...', 'waiting');
+                bgMusic.pause();
             }
         });
 

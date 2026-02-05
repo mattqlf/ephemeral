@@ -38,14 +38,10 @@ bash scripts/setup_runpod.sh
 
 ### API Keys (RunPod)
 
-The Gemini text-to-world feature requires a Google API key. On your RunPod instance:
+The Gemini text-to-world feature requires a Google API key. Replace the key in `apps/servers/web_server.py`:
 
-```bash
-# Set for the current session
-export GOOGLE_API_KEY="your-google-api-key"
-
-# Or persist across restarts by adding to .env
-echo 'GOOGLE_API_KEY=your-google-api-key' > .env
+```python
+os.environ["GOOGLE_API_KEY"] = "your-google-api-key"
 ```
 
 Get a key at https://aistudio.google.com/apikey
