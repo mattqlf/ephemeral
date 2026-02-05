@@ -286,6 +286,52 @@
 
         .upload-remove:hover { color: #ff4444; }
 
+        /* Prompt bar */
+        .prompt-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+        }
+
+        .prompt-bar-label {
+            font-size: 9px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            white-space: nowrap;
+        }
+
+        .prompt-input {
+            flex: 1;
+            padding: 6px 10px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-family: 'Courier New', monospace;
+            font-size: 10px;
+            outline: none;
+        }
+
+        .prompt-input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .prompt-input:focus {
+            border-color: var(--accent);
+        }
+
+        .prompt-badge {
+            font-size: 8px;
+            color: var(--bg);
+            background: var(--accent);
+            padding: 2px 6px;
+            letter-spacing: 0.05em;
+            white-space: nowrap;
+        }
+
         /* Control panel */
         .control-panel {
             background: var(--bg-panel);
@@ -488,6 +534,12 @@
                 </div>
                 <input type="file" id="fileInput" accept="image/*">
             </div>
+
+            <div class="prompt-bar">
+                <span class="prompt-bar-label">Prompt</span>
+                <input type="text" class="prompt-input" id="promptInput" placeholder="optional: describe the world to generate (uses Gemini)" />
+                <span class="prompt-badge">GEMINI</span>
+            </div>
         </div>
 
         <div class="control-panel">
@@ -575,6 +627,7 @@
         const previewImg = document.getElementById('previewImg');
         const previewName = document.getElementById('previewName');
         const removeUpload = document.getElementById('removeUpload');
+        const promptInput = document.getElementById('promptInput');
 
         let ws = null;
         let isRunning = false;
@@ -760,6 +813,10 @@
                 case 'ready': setStatus('Ready', 'waiting'); break;
                 case 'request_action': setStatus(`Block ${msg.block}`, 'waiting'); startInputSequence(); break;
                 case 'block_complete': setStatus(`Block ${msg.block} done`, 'connected'); resetInputState(); break;
+                case 'generating_image':
+                    setStatus('Gemini generating...', 'waiting');
+                    inputDisplay.textContent = `> ${msg.message || 'generating world with Gemini...'}`;
+                    break;
                 case 'complete': case 'stopped':
                     setStatus(msg.type === 'complete' ? 'Complete' : 'Stopped', 'connected');
                     isRunning = false; startBtn.disabled = false; stopBtn.disabled = true;
@@ -777,6 +834,7 @@
         }
 
         document.addEventListener('keydown', (e) => {
+            if (e.target === promptInput) return;
             const k = e.key.toLowerCase();
             if (CAMERA_KEYS.includes(k)) handleCameraInput(k);
             else if (MOVEMENT_KEYS.includes(k)) handleMovementInput(k);
@@ -794,10 +852,20 @@
         startBtn.addEventListener('click', () => {
             if (ws?.readyState === WebSocket.OPEN) {
                 isRunning = true; startBtn.disabled = true; stopBtn.disabled = false;
-                resetInputState(); inputDisplay.textContent = '> starting...';
+                resetInputState();
+                const prompt = promptInput.value.trim();
                 const isUpload = document.querySelector('[data-tab="upload"]').classList.contains('active');
-                ws.send(JSON.stringify({ type: 'start', image: isUpload && uploadedImageData ? uploadedImageData : imageSelect.value }));
-                setStatus('Starting...', 'waiting');
+                const image = isUpload && uploadedImageData ? uploadedImageData : imageSelect.value;
+                const msg = { type: 'start', image };
+                if (prompt) {
+                    msg.prompt = prompt;
+                    inputDisplay.textContent = '> generating world with Gemini...';
+                    setStatus('Generating image...', 'waiting');
+                } else {
+                    inputDisplay.textContent = '> starting...';
+                    setStatus('Starting...', 'waiting');
+                }
+                ws.send(JSON.stringify(msg));
             }
         });
 

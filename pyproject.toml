@@ -49,6 +49,7 @@ dependencies = [
   "uvicorn[standard]",
   "wandb",
   "hf_transfer",
+  "google-genai",
 ]
 
 [tool.uv.sources]
