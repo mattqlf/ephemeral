@@ -310,13 +310,31 @@ class InferenceEngine:
         img.save(buffer, format="JPEG", quality=85)
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
+    async def _send_ws(self, websocket: WebSocket, payload: dict) -> bool:
+        """Best-effort websocket send that treats disconnects as normal stop events."""
+        msg_type = payload.get("type", "unknown")
+        client_label = _websocket_client_label(websocket)
+        try:
+            await websocket.send_json(payload)
+            return True
+        except Exception as exc:
+            self.should_stop = True
+            logger.info(
+                "[UI %s] WebSocket closed during send type=%s; stopping inference (%s)",
+                client_label,
+                msg_type,
+                str(exc),
+            )
+            return False
+
     async def _generate_image_with_gemini(self, prompt: str, ref_image: Image.Image, websocket) -> Image.Image:
         """Generate a new image using Gemini with a text prompt and reference image."""
         client_label = _websocket_client_label(websocket)
-        await websocket.send_json({
+        if not await self._send_ws(websocket, {
             "type": "generating_image",
             "message": f"Generating: {prompt[:60]}..."
-        })
+        }):
+            raise RuntimeError("Client disconnected during Gemini generation")
 
         logger.info("[UI %s] Gemini generation started (prompt_chars=%d)", client_label, len(prompt))
 
@@ -597,18 +615,20 @@ class InferenceEngine:
 
             # Send initial frame
             init_frame = np.array(image.resize((640, 352)))
-            await websocket.send_json({
+            if not await self._send_ws(websocket, {
                 "type": "frame",
                 "data": self._frame_to_base64(init_frame),
                 "block": 0
-            })
+            }):
+                return
 
             # Send ready signal
-            await websocket.send_json({
+            if not await self._send_ws(websocket, {
                 "type": "ready",
                 "mode": self.mode,
                 "message": "Ready for input. Press keys to control."
-            })
+            }):
+                return
             logger.info("[UI %s] Ready; waiting for interactive actions", client_label)
 
             # Run inference loop
@@ -620,11 +640,12 @@ class InferenceEngine:
                 )
 
         except Exception as e:
-            logger.exception("[UI %s] Inference failed", client_label)
-            try:
-                await websocket.send_json({"type": "error", "message": str(e)})
-            except Exception:
-                logger.warning("[UI %s] Could not send error over websocket", client_label)
+            if self.should_stop:
+                logger.info("[UI %s] Inference stopped due to disconnect/stop request", client_label)
+            else:
+                logger.exception("[UI %s] Inference failed", client_label)
+                if not await self._send_ws(websocket, {"type": "error", "message": str(e)}):
+                    logger.warning("[UI %s] Could not send error over websocket", client_label)
         finally:
             self.is_running = False
             elapsed = time.perf_counter() - run_started_at
@@ -681,11 +702,12 @@ class InferenceEngine:
             block_num = block_index + 1
 
             # Request action from client
-            await websocket.send_json({
+            if not await self._send_ws(websocket, {
                 "type": "request_action",
                 "block": block_num,
                 "mode": self.mode
-            })
+            }):
+                return
             logger.info(
                 "[UI %s] Block %d/%d requested action (queued_actions=%d)",
                 client_label,
@@ -796,12 +818,13 @@ class InferenceEngine:
 
             # Send each frame
             for frame_idx, frame in enumerate(video_np):
-                await websocket.send_json({
+                if not await self._send_ws(websocket, {
                     "type": "frame",
                     "data": self._frame_to_base64(frame),
                     "block": block_num,
                     "frame": frame_idx
-                })
+                }):
+                    return
                 await asyncio.sleep(0.04)  # ~25fps pacing
 
             current_start_frame += num_frame_per_block
@@ -818,13 +841,15 @@ class InferenceEngine:
             )
 
             # Send block complete
-            await websocket.send_json({
+            if not await self._send_ws(websocket, {
                 "type": "block_complete",
                 "block": block_num
-            })
+            }):
+                return
 
         # Send completion
-        await websocket.send_json({"type": "complete"})
+        if not await self._send_ws(websocket, {"type": "complete"}):
+            return
         total_elapsed = time.perf_counter() - loop_started_at
         logger.info(
             "[UI %s] Generation loop finished blocks=%d/%d elapsed=%.2fs",
@@ -950,10 +975,12 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info("[WS %s] Disconnected", client_label)
         if inference_engine:
             inference_engine.stop()
+            await inference_engine.action_queue.put(None)
     except Exception as e:
         logger.exception("[WS %s] WebSocket error", client_label)
         if inference_engine:
             inference_engine.stop()
+            await inference_engine.action_queue.put(None)
 
 
 def parse_args():
