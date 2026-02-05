@@ -9,7 +9,7 @@ If the user's next action matches the speculation, the pre-generated block
 is used immediately (near-zero latency). If not, it's discarded and regenerated.
 
 Usage:
-    uv run python web_server_speculative.py \
+    uv run python -m apps.servers.web_server_speculative \
         --config_path configs/inference_yaml/inference_universal.yaml \
         --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
         --pretrained_model_path Matrix-Game-2.0 \
@@ -180,7 +180,7 @@ class SpeculativeInferenceEngine:
         if self.num_gpus < 2:
             raise RuntimeError(
                 f"Speculative mode requires 2 GPUs, but only {self.num_gpus} available. "
-                "Use web_server.py for single-GPU inference."
+                "Use apps.servers.web_server for single-GPU inference."
             )
 
         self.device_primary = torch.device("cuda:0")

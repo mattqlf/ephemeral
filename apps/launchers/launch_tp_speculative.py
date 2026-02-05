@@ -11,15 +11,15 @@ GPU Layout:
 
 Examples:
     # 4 GPUs: 2 for primary TP, 2 for speculative TP
-    uv run python launch_tp_speculative.py --num_gpus 4 \
+    uv run python -m apps.launchers.launch_tp_speculative --num_gpus 4 \
         --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors
 
     # 6 GPUs: 3 for primary TP, 3 for speculative TP
-    uv run python launch_tp_speculative.py --num_gpus 6 --fast \
+    uv run python -m apps.launchers.launch_tp_speculative --num_gpus 6 --fast \
         --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors
 
     # 8 GPUs: 4 for primary TP, 4 for speculative TP
-    uv run python launch_tp_speculative.py --num_gpus 8 --port 8888 --fast \
+    uv run python -m apps.launchers.launch_tp_speculative --num_gpus 8 --port 8888 --fast \
         --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors
 """
 
@@ -35,11 +35,11 @@ def main():
         epilog="""
 Examples:
     # 4 GPUs (2 TP per group)
-    uv run python launch_tp_speculative.py --num_gpus 4 \\
+    uv run python -m apps.launchers.launch_tp_speculative --num_gpus 4 \\
         --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors
 
     # 6 GPUs (3 TP per group) with fast mode
-    uv run python launch_tp_speculative.py --num_gpus 6 --fast \\
+    uv run python -m apps.launchers.launch_tp_speculative --num_gpus 6 --fast \\
         --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors
         """
     )
@@ -121,7 +121,8 @@ Examples:
         "uv", "run", "torchrun",
         f"--nproc_per_node={args.num_gpus}",
         f"--master_port={args.master_port}",
-        "web_server_tp_speculative.py",
+        "--module",
+        "apps.servers.web_server_tp_speculative",
         f"--config_path={args.config_path}",
         f"--checkpoint_path={args.checkpoint_path}",
         f"--pretrained_model_path={args.pretrained_model_path}",

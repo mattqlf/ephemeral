@@ -7,15 +7,15 @@ Uses FSDP + Ulysses sequence parallelism for distributed inference.
 
 Usage:
     # 8-GPU with FSDP + sequence parallelism (recommended)
-    uv run python launch_lingbot.py --num_gpus 8 \
+    uv run python -m apps.launchers.launch_lingbot --num_gpus 8 \
         --ckpt_dir lingbot-world-base-cam --dit_fsdp --t5_fsdp
 
     # 4-GPU
-    uv run python launch_lingbot.py --num_gpus 4 \
+    uv run python -m apps.launchers.launch_lingbot --num_gpus 4 \
         --ckpt_dir lingbot-world-base-cam --dit_fsdp --t5_fsdp
 
     # Custom port and resolution
-    uv run python launch_lingbot.py --num_gpus 8 \
+    uv run python -m apps.launchers.launch_lingbot --num_gpus 8 \
         --ckpt_dir lingbot-world-base-cam --dit_fsdp --t5_fsdp \
         --port 8889 --size 720*1280
 """
@@ -32,11 +32,11 @@ def main():
         epilog="""
 Examples:
     # 8-GPU with FSDP (recommended)
-    uv run python launch_lingbot.py --num_gpus 8 \\
+    uv run python -m apps.launchers.launch_lingbot --num_gpus 8 \\
         --ckpt_dir lingbot-world-base-cam --dit_fsdp --t5_fsdp
 
     # 4-GPU
-    uv run python launch_lingbot.py --num_gpus 4 \\
+    uv run python -m apps.launchers.launch_lingbot --num_gpus 4 \\
         --ckpt_dir lingbot-world-base-cam --dit_fsdp --t5_fsdp
         """
     )
@@ -102,11 +102,12 @@ Examples:
             "uv", "run", "torchrun",
             f"--nproc_per_node={args.num_gpus}",
             f"--master_port={args.master_port}",
-            "web_server_lingbot.py",
+            "--module",
+            "apps.servers.web_server_lingbot",
         ]
     else:
         # Single GPU: direct execution
-        cmd = ["uv", "run", "python", "web_server_lingbot.py"]
+        cmd = ["uv", "run", "python", "-m", "apps.servers.web_server_lingbot"]
 
     # Append server arguments
     cmd.extend([

@@ -7,7 +7,7 @@ frontend flow: start, direction input, progress updates, frame
 streaming, chunk completion.
 
 Usage:
-    uv run python web_server_lingbot_mock.py
+    uv run python -m apps.servers.web_server_lingbot_mock
     # Then open http://localhost:8889
 """
 

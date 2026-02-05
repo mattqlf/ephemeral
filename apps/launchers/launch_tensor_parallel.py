@@ -7,15 +7,15 @@ launching one process per GPU using torchrun.
 
 Usage:
     # 2-GPU tensor parallelism
-    uv run python launch_tensor_parallel.py --num_gpus 2 \
+    uv run python -m apps.launchers.launch_tensor_parallel --num_gpus 2 \
         --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors
 
     # 4-GPU tensor parallelism with fast mode
-    uv run python launch_tensor_parallel.py --num_gpus 4 --fast \
+    uv run python -m apps.launchers.launch_tensor_parallel --num_gpus 4 --fast \
         --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors
 
     # Custom port
-    uv run python launch_tensor_parallel.py --num_gpus 2 --port 8888 \
+    uv run python -m apps.launchers.launch_tensor_parallel --num_gpus 2 --port 8888 \
         --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors
 """
 
@@ -31,11 +31,11 @@ def main():
         epilog="""
 Examples:
     # Basic 2-GPU setup
-    uv run python launch_tensor_parallel.py --num_gpus 2 \\
+    uv run python -m apps.launchers.launch_tensor_parallel --num_gpus 2 \\
         --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors
 
     # 4-GPU with fast mode (2 denoising steps)
-    uv run python launch_tensor_parallel.py --num_gpus 4 --fast \\
+    uv run python -m apps.launchers.launch_tensor_parallel --num_gpus 4 --fast \\
         --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors
         """
     )
@@ -46,7 +46,7 @@ Examples:
     parser.add_argument("--master_port", type=str, default="29500",
                         help="Port for distributed communication (default: 29500)")
 
-    # Server arguments (passed through to web_server_tensor_parallel.py)
+    # Server arguments (passed through to apps.servers.web_server_tensor_parallel)
     parser.add_argument("--config_path", type=str,
                         default="configs/inference_yaml/inference_universal.yaml",
                         help="Path to inference config")
@@ -108,7 +108,8 @@ Examples:
         "uv", "run", "torchrun",
         f"--nproc_per_node={args.num_gpus}",
         f"--master_port={args.master_port}",
-        "web_server_tensor_parallel.py",
+        "--module",
+        "apps.servers.web_server_tensor_parallel",
         f"--config_path={args.config_path}",
         f"--checkpoint_path={args.checkpoint_path}",
         f"--pretrained_model_path={args.pretrained_model_path}",

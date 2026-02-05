@@ -40,15 +40,6 @@ else
   hf download Skywork/Matrix-Game-2.0 --local-dir "$WEIGHTS_DIR"
 fi
 
-# Download LingBot-World weights
-LINGBOT_DIR="lingbot-world-base-cam"
-if [[ -d "$LINGBOT_DIR" && -n "$(ls -A "$LINGBOT_DIR" 2>/dev/null)" ]]; then
-  echo "LingBot-World weights already exist, skipping download."
-else
-  echo "Downloading LingBot-World weights..."
-  hf download robbyant/lingbot-world-base-cam --local-dir "$LINGBOT_DIR"
-fi
-
 echo ""
 echo "============================================"
 echo "Setup complete!"

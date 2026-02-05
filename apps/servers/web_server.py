@@ -1,7 +1,7 @@
 """
 Web UI server for Matrix-Game 2.0 with WebSocket streaming.
 
-Run with: uv run python web_server.py --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors
+Run with: uv run python -m apps.servers.web_server --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors
 """
 
 import os
@@ -39,6 +39,8 @@ from utils.misc import set_seed
 from utils.conditions import Bench_actions_universal, Bench_actions_gta_drive, Bench_actions_templerun
 from utils.wan_wrapper import WanDiffusionWrapper
 
+from google import genai
+from google.genai import types as genai_types
 
 app = FastAPI(title="Matrix-Game 2.0 Web UI")
 
@@ -286,6 +288,44 @@ class InferenceEngine:
         img.save(buffer, format="JPEG", quality=85)
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
+    async def _generate_image_with_gemini(self, prompt: str, ref_image: Image.Image, websocket) -> Image.Image:
+        """Generate a new image using Gemini with a text prompt and reference image."""
+        await websocket.send_json({
+            "type": "generating_image",
+            "message": f"Generating: {prompt[:60]}..."
+        })
+
+        print(f"[Gemini] Generating image with prompt: {prompt}")
+
+        def _call_gemini():
+            client = genai.Client()
+            contents = [prompt, ref_image]
+            response = client.models.generate_content(
+                model="gemini-2.0-flash-preview-image-generation",
+                contents=contents,
+                config=genai_types.GenerateContentConfig(
+                    response_modalities=['TEXT', 'IMAGE'],
+                    image_config=genai_types.ImageConfig(
+                        aspect_ratio="16:9",
+                    ),
+                ),
+            )
+            for part in response.parts:
+                if part.text is not None:
+                    print(f"[Gemini] Response text: {part.text}")
+                elif img := part.as_image():
+                    return img
+            return None
+
+        loop = asyncio.get_event_loop()
+        generated = await loop.run_in_executor(None, _call_gemini)
+
+        if generated is None:
+            raise RuntimeError("Gemini did not return an image")
+
+        print(f"[Gemini] Generated image: {generated.size}")
+        return generated.convert('RGB')
+
     def _parse_action(self, action_data: dict) -> dict:
         """Parse action from WebSocket message to tensor format."""
         mode = self.mode
@@ -330,7 +370,7 @@ class InferenceEngine:
             result["mouse"] = mouse_cond
         return result
 
-    async def run_inference(self, img_input: str, websocket: WebSocket):
+    async def run_inference(self, img_input: str, websocket: WebSocket, prompt: str = None):
         """Run inference loop with WebSocket streaming."""
         self.is_running = True
         self.should_stop = False
@@ -355,6 +395,11 @@ class InferenceEngine:
                 # Handle file path
                 print(f"Loading image from: {img_input}")
                 image = load_image(img_input)
+
+            # If prompt provided, generate new image with Gemini
+            if prompt:
+                image = await self._generate_image_with_gemini(prompt, image, websocket)
+
             image = self._resizecrop(image, 352, 640)
             print(f"  Resized to: {image.size}")
 
@@ -595,12 +640,6 @@ async def get_app():
     return FileResponse("web_ui/app.html")
 
 
-@app.get("/lingbot.html", response_class=HTMLResponse)
-async def get_lingbot():
-    """Serve the LingBot page (links to separate server)."""
-    return FileResponse("web_ui/lingbot.html")
-
-
 @app.get("/assets/{filename}")
 async def get_asset(filename: str):
     """Serve static assets from web_ui/assets/."""
@@ -644,10 +683,11 @@ async def websocket_endpoint(websocket: WebSocket):
 
             if msg_type == "start":
                 img_input = data.get("image", "demo_images/universal/0000.png")
+                prompt = data.get("prompt", None)
                 if inference_engine and not inference_engine.is_running:
                     try:
                         asyncio.create_task(
-                            inference_engine.run_inference(img_input, websocket))
+                            inference_engine.run_inference(img_input, websocket, prompt=prompt))
                     except Exception as e:
                         print(f"Failed to start inference: {e}")
                         await websocket.send_json({

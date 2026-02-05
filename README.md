@@ -41,7 +41,7 @@ bash scripts/setup_runpod.sh
 Launch the web UI:
 
 ```bash
-uv run python web_server.py \
+uv run python -m apps.servers.web_server \
     --config_path configs/inference_yaml/inference_universal.yaml \
     --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
     --pretrained_model_path Matrix-Game-2.0 \
@@ -75,7 +75,7 @@ Press any movement key to move (camera defaults to neutral). Press any camera ke
 For terminal-based interaction:
 
 ```bash
-uv run python inference_streaming.py \
+uv run python -m apps.inference.inference_streaming \
     --config_path configs/inference_yaml/inference_universal.yaml \
     --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
     --pretrained_model_path Matrix-Game-2.0
@@ -90,7 +90,7 @@ For improved performance with multiple GPUs, two parallelism strategies are avai
 Uses a second GPU to pre-generate the next block assuming the same action. When the user continues holding the same key, the frame is delivered instantly.
 
 ```bash
-uv run python web_server_speculative.py \
+uv run python -m apps.servers.web_server_speculative \
     --config_path configs/inference_yaml/inference_universal.yaml \
     --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
     --pretrained_model_path Matrix-Game-2.0 \
@@ -103,12 +103,12 @@ Splits the model across GPUs to reduce per-block latency. Supports 2, 3, 4, or 6
 
 ```bash
 # Using the launcher (recommended)
-uv run python launch_tensor_parallel.py --num_gpus 2 \
+uv run python -m apps.launchers.launch_tensor_parallel --num_gpus 2 \
     --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
     --port 8888 --fast
 
 # Or directly with torchrun
-uv run torchrun --nproc_per_node=2 web_server_tensor_parallel.py \
+uv run torchrun --nproc_per_node=2 --module apps.servers.web_server_tensor_parallel \
     --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
     --port 8888 --fast
 ```
@@ -121,12 +121,12 @@ Combines tensor parallelism with speculative pipelining for the best performance
 
 ```bash
 # 4 GPUs: 2 for primary TP, 2 for speculative TP
-uv run python launch_tp_speculative.py --num_gpus 4 \
+uv run python -m apps.launchers.launch_tp_speculative --num_gpus 4 \
     --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
     --port 8888 --fast
 
 # 6 GPUs: 3 for primary TP, 3 for speculative TP
-uv run python launch_tp_speculative.py --num_gpus 6 \
+uv run python -m apps.launchers.launch_tp_speculative --num_gpus 6 \
     --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
     --port 8888 --fast
 ```

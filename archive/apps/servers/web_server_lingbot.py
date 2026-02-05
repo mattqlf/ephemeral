@@ -5,7 +5,7 @@ This server wraps LingBot-World's WanI2V model for interactive camera-controlled
 world generation. It generates video in 17-frame chunks with user-directed camera
 movement between chunks.
 
-Launch via: python launch_lingbot.py --ckpt_dir <path> --port 8889
+Launch via: python -m apps.launchers.launch_lingbot --ckpt_dir <path> --port 8889
 
 Architecture:
 - Uses FSDP + Ulysses sequence parallelism across 4 GPUs

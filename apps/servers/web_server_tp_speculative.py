@@ -15,12 +15,12 @@ Benefits:
 
 Usage:
     # Launch with torchrun (4 GPUs: 2 for primary, 2 for speculative)
-    uv run torchrun --nproc_per_node=4 web_server_tp_speculative.py \
+    uv run torchrun --nproc_per_node=4 --module apps.servers.web_server_tp_speculative \
         --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
         --port 8888 --fast
 
     # Or use the launcher script (recommended)
-    uv run python launch_tp_speculative.py --num_gpus 4 --port 8888 --fast
+    uv run python -m apps.launchers.launch_tp_speculative --num_gpus 4 --port 8888 --fast
 
 Requires: 4+ GPUs (even number), split evenly between primary and speculative
 """

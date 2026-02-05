@@ -11,14 +11,14 @@ Architecture:
 
 Usage:
     # Launch with torchrun for multi-GPU
-    uv run torchrun --nproc_per_node=2 web_server_tensor_parallel.py \
+    uv run torchrun --nproc_per_node=2 --module apps.servers.web_server_tensor_parallel \
         --config_path configs/inference_yaml/inference_universal.yaml \
         --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
         --pretrained_model_path Matrix-Game-2.0 \
         --port 8888
 
     # Or use the launcher script (recommended)
-    uv run python launch_tensor_parallel.py --num_gpus 2 --port 8888
+    uv run python -m apps.launchers.launch_tensor_parallel --num_gpus 2 --port 8888
 
 Requires: 2+ GPUs with sufficient VRAM (~16GB each with TP=2)
 """
