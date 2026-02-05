@@ -5,6 +5,9 @@ Run with: uv run python -m apps.servers.web_server --checkpoint_path Matrix-Game
 """
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import io
 import asyncio
 import argparse
@@ -318,7 +321,7 @@ class InferenceEngine:
             client = genai.Client()
             contents = [prompt, ref_image]
             response = client.models.generate_content(
-                model="gemini-2.0-flash-preview-image-generation",
+                model="gemini-2.5-flash-image",
                 contents=contents,
                 config=genai_types.GenerateContentConfig(
                     response_modalities=['TEXT', 'IMAGE'],
@@ -330,8 +333,9 @@ class InferenceEngine:
             for part in response.parts:
                 if part.text is not None:
                     logger.info("[UI %s] Gemini text response: %s", client_label, part.text[:200])
-                elif img := part.as_image():
-                    return img
+                elif part.inline_data is not None:
+                    img_bytes = part.inline_data.data
+                    return Image.open(io.BytesIO(img_bytes)).convert('RGB')
             return None
 
         loop = asyncio.get_event_loop()
@@ -341,7 +345,7 @@ class InferenceEngine:
             raise RuntimeError("Gemini did not return an image")
 
         logger.info("[UI %s] Gemini generated image size=%s", client_label, generated.size)
-        return generated.convert('RGB')
+        return generated
 
     def _parse_action(self, action_data: dict) -> dict:
         """Parse action from WebSocket message to tensor format."""

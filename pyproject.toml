@@ -50,6 +50,8 @@ dependencies = [
   "wandb",
   "hf_transfer",
   "google-genai",
+  "python-dotenv",
+  "httpx",
 ]
 
 [tool.uv.sources]
@@ -67,4 +69,4 @@ explicit = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["demo_utils*", "pipeline*", "utils*", "wan*"]
+include = ["demo_utils*", "pipeline*", "utils*", "wan*", "suno_api*"]
