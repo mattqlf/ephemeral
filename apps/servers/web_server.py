@@ -10,6 +10,8 @@ import asyncio
 import argparse
 import base64
 import copy
+import logging
+import time
 from queue import Queue, Empty
 from typing import Optional
 
@@ -43,9 +45,23 @@ from google import genai
 from google.genai import types as genai_types
 
 app = FastAPI(title="Matrix-Game 2.0 Web UI")
+logger = logging.getLogger("ephemeral.web")
 
 # Global state
 inference_engine: Optional["InferenceEngine"] = None
+
+
+def _websocket_client_label(websocket: WebSocket) -> str:
+    client = getattr(websocket, "client", None)
+    if client is None:
+        return "unknown"
+    return f"{client.host}:{client.port}"
+
+
+def _summarize_action_payload(action_data: dict) -> str:
+    keyboard = action_data.get("keyboard", "q")
+    mouse = action_data.get("mouse", "u")
+    return f"keyboard={keyboard} mouse={mouse}"
 
 
 class InferenceEngine:
@@ -290,12 +306,13 @@ class InferenceEngine:
 
     async def _generate_image_with_gemini(self, prompt: str, ref_image: Image.Image, websocket) -> Image.Image:
         """Generate a new image using Gemini with a text prompt and reference image."""
+        client_label = _websocket_client_label(websocket)
         await websocket.send_json({
             "type": "generating_image",
             "message": f"Generating: {prompt[:60]}..."
         })
 
-        print(f"[Gemini] Generating image with prompt: {prompt}")
+        logger.info("[UI %s] Gemini generation started (prompt_chars=%d)", client_label, len(prompt))
 
         def _call_gemini():
             client = genai.Client()
@@ -312,7 +329,7 @@ class InferenceEngine:
             )
             for part in response.parts:
                 if part.text is not None:
-                    print(f"[Gemini] Response text: {part.text}")
+                    logger.info("[UI %s] Gemini text response: %s", client_label, part.text[:200])
                 elif img := part.as_image():
                     return img
             return None
@@ -323,7 +340,7 @@ class InferenceEngine:
         if generated is None:
             raise RuntimeError("Gemini did not return an image")
 
-        print(f"[Gemini] Generated image: {generated.size}")
+        logger.info("[UI %s] Gemini generated image size=%s", client_label, generated.size)
         return generated.convert('RGB')
 
     def _parse_action(self, action_data: dict) -> dict:
@@ -372,28 +389,43 @@ class InferenceEngine:
 
     async def run_inference(self, img_input: str, websocket: WebSocket, prompt: str = None):
         """Run inference loop with WebSocket streaming."""
+        client_label = _websocket_client_label(websocket)
+        run_started_at = time.perf_counter()
         self.is_running = True
         self.should_stop = False
 
         # Clear any pending actions
+        dropped_actions = 0
         while not self.action_queue.empty():
             try:
                 self.action_queue.get_nowait()
-            except:
+                dropped_actions += 1
+            except Exception:
                 break
+        if dropped_actions:
+            logger.info("[UI %s] Cleared %d stale queued actions before start", client_label, dropped_actions)
 
         try:
+            image_source = "upload" if img_input.startswith("data:image") else "path"
+            logger.info(
+                "[UI %s] Starting inference mode=%s image_source=%s prompt=%s",
+                client_label,
+                self.mode,
+                image_source,
+                "yes" if prompt else "no",
+            )
+
             # Load and process image (supports file path or base64 data)
             if img_input.startswith('data:image'):
                 # Handle base64 uploaded image
-                print(f"Processing uploaded image ({len(img_input) // 1024}KB base64)...")
+                logger.info("[UI %s] Processing uploaded image (~%d KB base64)", client_label, len(img_input) // 1024)
                 header, b64_data = img_input.split(',', 1)
                 img_bytes = base64.b64decode(b64_data)
                 image = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-                print(f"  Image size: {image.size}")
+                logger.info("[UI %s] Uploaded image size=%s", client_label, image.size)
             else:
                 # Handle file path
-                print(f"Loading image from: {img_input}")
+                logger.info("[UI %s] Loading image from path=%s", client_label, img_input)
                 image = load_image(img_input)
 
             # If prompt provided, generate new image with Gemini
@@ -401,7 +433,7 @@ class InferenceEngine:
                 image = await self._generate_image_with_gemini(prompt, image, websocket)
 
             image = self._resizecrop(image, 352, 640)
-            print(f"  Resized to: {image.size}")
+            logger.info("[UI %s] Input image normalized to %s", client_label, image.size)
 
             image_tensor = self.frame_process(image)[None, :, None, :, :].to(
                 dtype=self.weight_dtype, device=self.device)
@@ -462,6 +494,7 @@ class InferenceEngine:
                 "mode": self.mode,
                 "message": "Ready for input. Press keys to control."
             })
+            logger.info("[UI %s] Ready; waiting for interactive actions", client_label)
 
             # Run inference loop
             with torch.no_grad():
@@ -472,11 +505,15 @@ class InferenceEngine:
                 )
 
         except Exception as e:
-            import traceback
-            traceback.print_exc()
-            await websocket.send_json({"type": "error", "message": str(e)})
+            logger.exception("[UI %s] Inference failed", client_label)
+            try:
+                await websocket.send_json({"type": "error", "message": str(e)})
+            except Exception:
+                logger.warning("[UI %s] Could not send error over websocket", client_label)
         finally:
             self.is_running = False
+            elapsed = time.perf_counter() - run_started_at
+            logger.info("[UI %s] Inference session ended after %.2fs", client_label, elapsed)
 
     async def _inference_loop(
         self,
@@ -490,6 +527,16 @@ class InferenceEngine:
 
         num_blocks = num_frames // num_frame_per_block
         max_blocks = self.args.max_blocks or num_blocks
+        total_blocks = min(max_blocks, num_blocks)
+        client_label = _websocket_client_label(websocket)
+        loop_started_at = time.perf_counter()
+        logger.info(
+            "[UI %s] Entering generation loop blocks=%d frames_per_block=%d denoise_steps=%s",
+            client_label,
+            total_blocks,
+            num_frame_per_block,
+            self.pipeline.denoising_step_list,
+        )
 
         output = torch.zeros_like(noise)
         videos = []
@@ -508,31 +555,53 @@ class InferenceEngine:
         self.pipeline._initialize_crossattn_cache(batch_size, noise.dtype, noise.device)
 
         current_start_frame = 0
+        generated_blocks = 0
 
         # Main generation loop
-        for block_index in range(min(max_blocks, num_blocks)):
+        for block_index in range(total_blocks):
             if self.should_stop:
+                logger.info("[UI %s] Stop flag set before block %d", client_label, block_index + 1)
                 break
+            block_started_at = time.perf_counter()
+            block_num = block_index + 1
 
             # Request action from client
             await websocket.send_json({
                 "type": "request_action",
-                "block": block_index + 1,
+                "block": block_num,
                 "mode": self.mode
             })
+            logger.info(
+                "[UI %s] Block %d/%d requested action (queued_actions=%d)",
+                client_label,
+                block_num,
+                total_blocks,
+                self.action_queue.qsize(),
+            )
 
             # Wait for action with timeout
             try:
+                action_wait_started_at = time.perf_counter()
                 action = await asyncio.wait_for(
                     self.action_queue.get(),
                     timeout=120.0
                 )
                 if action is None:
+                    logger.info("[UI %s] Block %d received stop sentinel", client_label, block_num)
                     break
                 current_actions = self._parse_action(action)
+                action_wait_ms = (time.perf_counter() - action_wait_started_at) * 1000.0
+                logger.info(
+                    "[UI %s] Block %d action received in %.1fms (%s)",
+                    client_label,
+                    block_num,
+                    action_wait_ms,
+                    _summarize_action_payload(action),
+                )
             except asyncio.TimeoutError:
                 # Use neutral action on timeout
                 current_actions = self._parse_action({"keyboard": "q", "mouse": "u"})
+                logger.warning("[UI %s] Block %d action timeout; using neutral action", client_label, block_num)
 
             # Prepare input
             noisy_input = noise[:, :, current_start_frame:current_start_frame + num_frame_per_block]
@@ -543,6 +612,14 @@ class InferenceEngine:
 
             # Denoising loop
             for index, current_timestep in enumerate(self.pipeline.denoising_step_list):
+                logger.info(
+                    "[UI %s] Block %d denoise step %d/%d (timestep=%d)",
+                    client_label,
+                    block_num,
+                    index + 1,
+                    len(self.pipeline.denoising_step_list),
+                    current_timestep,
+                )
                 timestep = torch.ones(
                     [batch_size, num_frame_per_block],
                     device=noise.device, dtype=torch.int64) * current_timestep
@@ -607,24 +684,44 @@ class InferenceEngine:
                 await websocket.send_json({
                     "type": "frame",
                     "data": self._frame_to_base64(frame),
-                    "block": block_index + 1,
+                    "block": block_num,
                     "frame": frame_idx
                 })
                 await asyncio.sleep(0.04)  # ~25fps pacing
 
             current_start_frame += num_frame_per_block
+            generated_blocks += 1
+            block_elapsed = time.perf_counter() - block_started_at
+            block_fps = len(video_np) / block_elapsed if block_elapsed > 0 else 0.0
+            logger.info(
+                "[UI %s] Block %d complete frames=%d elapsed=%.2fs throughput=%.2f fps",
+                client_label,
+                block_num,
+                len(video_np),
+                block_elapsed,
+                block_fps,
+            )
 
             # Send block complete
             await websocket.send_json({
                 "type": "block_complete",
-                "block": block_index + 1
+                "block": block_num
             })
 
         # Send completion
         await websocket.send_json({"type": "complete"})
+        total_elapsed = time.perf_counter() - loop_started_at
+        logger.info(
+            "[UI %s] Generation loop finished blocks=%d/%d elapsed=%.2fs",
+            client_label,
+            generated_blocks,
+            total_blocks,
+            total_elapsed,
+        )
 
     def stop(self):
         """Stop the inference loop."""
+        logger.info("Stop requested for active inference loop")
         self.should_stop = True
 
 
@@ -675,26 +772,37 @@ async def list_images():
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time communication."""
     await websocket.accept()
+    client_label = _websocket_client_label(websocket)
+    logger.info("[WS %s] Connected", client_label)
 
     try:
         while True:
             data = await websocket.receive_json()
             msg_type = data.get("type")
+            logger.info("[WS %s] Received message type=%s", client_label, msg_type)
 
             if msg_type == "start":
                 img_input = data.get("image", "demo_images/universal/0000.png")
                 prompt = data.get("prompt", None)
+                logger.info(
+                    "[WS %s] Start requested image_source=%s prompt=%s",
+                    client_label,
+                    "upload" if str(img_input).startswith("data:image") else "path",
+                    "yes" if prompt else "no",
+                )
                 if inference_engine and not inference_engine.is_running:
                     try:
                         asyncio.create_task(
                             inference_engine.run_inference(img_input, websocket, prompt=prompt))
+                        logger.info("[WS %s] Inference task created", client_label)
                     except Exception as e:
-                        print(f"Failed to start inference: {e}")
+                        logger.exception("[WS %s] Failed to start inference task", client_label)
                         await websocket.send_json({
                             "type": "error",
                             "message": f"Failed to start: {str(e)}"
                         })
                 else:
+                    logger.warning("[WS %s] Start rejected: engine not ready or already running", client_label)
                     await websocket.send_json({
                         "type": "error",
                         "message": "Engine not ready or already running"
@@ -703,18 +811,30 @@ async def websocket_endpoint(websocket: WebSocket):
             elif msg_type == "action":
                 if inference_engine and inference_engine.is_running:
                     await inference_engine.action_queue.put(data)
+                    logger.info(
+                        "[WS %s] Queued action (%s) queue_size=%d",
+                        client_label,
+                        _summarize_action_payload(data),
+                        inference_engine.action_queue.qsize(),
+                    )
+                else:
+                    logger.warning("[WS %s] Dropped action: inference is not running", client_label)
 
             elif msg_type == "stop":
                 if inference_engine:
+                    logger.info("[WS %s] Stop requested by client", client_label)
                     inference_engine.stop()
                     await inference_engine.action_queue.put(None)
                     await websocket.send_json({"type": "stopped"})
+            else:
+                logger.warning("[WS %s] Unknown message type=%s", client_label, msg_type)
 
     except WebSocketDisconnect:
+        logger.info("[WS %s] Disconnected", client_label)
         if inference_engine:
             inference_engine.stop()
     except Exception as e:
-        print(f"WebSocket error: {e}")
+        logger.exception("[WS %s] WebSocket error", client_label)
         if inference_engine:
             inference_engine.stop()
 
@@ -739,17 +859,21 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
     set_seed(args.seed)
 
     # Initialize inference engine
-    print("Initializing inference engine...")
+    logger.info("Initializing inference engine...")
     inference_engine = InferenceEngine(args)
 
     # Create web_ui directory if needed
     os.makedirs("web_ui", exist_ok=True)
 
     # Start server
-    print(f"Starting server at http://{args.host}:{args.port}")
+    logger.info("Starting server at http://%s:%d", args.host, args.port)
     uvicorn.run(
         app,
         host=args.host,
