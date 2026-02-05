@@ -36,16 +36,33 @@ dependencies = [
   "pydantic",
   "safetensors",
   "scikit-image",
+  "scipy",
   "sentencepiece",
   "starlette",
   "tokenizers>=0.20.3",
-  "torch==2.5.0",
-  "torchvision==0.20.0",
+  "torch==2.8.0+cu128 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "torch==2.8.0 ; sys_platform != 'linux' or platform_machine != 'x86_64'",
+  "torchvision==0.23.0+cu128 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "torchvision==0.23.0 ; sys_platform != 'linux' or platform_machine != 'x86_64'",
   "tqdm",
   "transformers>=4.49.0",
   "uvicorn[standard]",
   "wandb",
+  "hf_transfer",
 ]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+]
+torchvision = [
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [tool.setuptools.packages.find]
 where = ["."]
