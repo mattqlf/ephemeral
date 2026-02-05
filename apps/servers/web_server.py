@@ -157,8 +157,11 @@ class InferenceEngine:
         current_vae_decoder.to(self.device, torch.float16)
         current_vae_decoder.requires_grad_(False)
         current_vae_decoder.eval()
-        print("  Compiling VAE decoder (this takes ~30s on first run)...")
-        current_vae_decoder.compile(mode="max-autotune-no-cudagraphs")
+        if getattr(self.args, "no_compile", False):
+            print("  Skipping VAE decoder compile (--no-compile). Using eager mode.")
+        else:
+            print("  Compiling VAE decoder (this takes ~30s on first run)...")
+            current_vae_decoder.compile(mode="max-autotune-no-cudagraphs")
 
         # Initialize pipeline
         pipeline = CausalInferenceStreamingPipeline(
@@ -175,8 +178,10 @@ class InferenceEngine:
 
         print("Models loaded successfully!")
 
-        # Warmup: trigger kernel compilation now instead of lazily
-        if not getattr(self.args, 'no_warmup', False):
+        # Warmup primarily exists to trigger compile paths ahead of first inference.
+        if getattr(self.args, "no_compile", False):
+            print("Skipping warmup (--no-compile).")
+        elif not getattr(self.args, 'no_warmup', False):
             self._warmup()
         else:
             print("Skipping warmup (--no-warmup). Kernels will compile on first inference.")
@@ -996,6 +1001,8 @@ def parse_args():
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--fast", action="store_true",
                         help="Use 2 denoising steps instead of 3 for faster inference (~33%% speedup, slight quality loss)")
+    parser.add_argument("--no-compile", action="store_true",
+                        help="Disable torch.compile for the VAE decoder (lower startup overhead, potentially lower throughput)")
     parser.add_argument("--no-warmup", action="store_true",
                         help="Skip kernel warmup (kernels will compile lazily on first inference)")
     return parser.parse_args()
