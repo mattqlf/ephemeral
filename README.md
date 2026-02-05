@@ -36,6 +36,20 @@ cd Matrix-Game
 bash scripts/setup_runpod.sh
 ```
 
+### API Keys (RunPod)
+
+The Gemini text-to-world feature requires a Google API key. On your RunPod instance:
+
+```bash
+# Set for the current session
+export GOOGLE_API_KEY="your-google-api-key"
+
+# Or persist across restarts by adding to .env
+echo 'GOOGLE_API_KEY=your-google-api-key' > .env
+```
+
+Get a key at https://aistudio.google.com/apikey
+
 ## Quick Start
 
 Launch the web UI:

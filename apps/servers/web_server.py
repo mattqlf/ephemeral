@@ -321,7 +321,7 @@ class InferenceEngine:
             client = genai.Client()
             contents = [prompt, ref_image]
             response = client.models.generate_content(
-                model="gemini-2.5-flash-image",
+                model="gemini-3-pro-image-preview",
                 contents=contents,
                 config=genai_types.GenerateContentConfig(
                     response_modalities=['TEXT', 'IMAGE'],
