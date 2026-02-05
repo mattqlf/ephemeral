@@ -23,7 +23,7 @@ dependencies = [
   "flask",
   "flask-socketio",
   "ftfy",
-  "huggingface_hub[cli]",
+  "huggingface_hub",
   "imageio",
   "imageio-ffmpeg",
   "lmdb",

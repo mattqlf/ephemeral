@@ -20,7 +20,14 @@ FLASH_ATTN_WHEEL="https://github.com/mjun0812/flash-attention-prebuild-wheels/re
 echo "Installing Flash Attention from: $FLASH_ATTN_WHEEL"
 uv pip install --python .venv/bin/python --no-deps "$FLASH_ATTN_WHEEL"
 
-# 3. Download Model Weights
+# 3. Install Hugging Face CLI
+if ! command -v hf >/dev/null 2>&1; then
+  echo "Installing Hugging Face CLI..."
+  curl -LsSf https://hf.co/cli/install.sh | bash
+  export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
+fi
+
+# 4. Download Model Weights
 echo "Enabling hf_transfer for faster downloads..."
 export HF_HUB_ENABLE_HF_TRANSFER=1
 
@@ -30,7 +37,7 @@ if [[ -d "$WEIGHTS_DIR" && -n "$(ls -A "$WEIGHTS_DIR" 2>/dev/null)" ]]; then
   echo "Matrix-Game weights already exist, skipping download."
 else
   echo "Downloading Matrix-Game weights (~30GB)..."
-  uv run --locked --no-sync huggingface-cli download Skywork/Matrix-Game-2.0 --local-dir "$WEIGHTS_DIR"
+  hf download Skywork/Matrix-Game-2.0 --local-dir "$WEIGHTS_DIR"
 fi
 
 # Download LingBot-World weights
@@ -39,7 +46,7 @@ if [[ -d "$LINGBOT_DIR" && -n "$(ls -A "$LINGBOT_DIR" 2>/dev/null)" ]]; then
   echo "LingBot-World weights already exist, skipping download."
 else
   echo "Downloading LingBot-World weights..."
-  uv run --locked --no-sync huggingface-cli download robbyant/lingbot-world-base-cam --local-dir "$LINGBOT_DIR"
+  hf download robbyant/lingbot-world-base-cam --local-dir "$LINGBOT_DIR"
 fi
 
 echo ""

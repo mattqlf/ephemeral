@@ -1725,7 +1725,7 @@ requires-dist = [
     { name = "flask-socketio" },
     { name = "ftfy" },
     { name = "hf-transfer" },
-    { name = "huggingface-hub", extras = ["cli"] },
+    { name = "huggingface-hub" },
     { name = "imageio" },
     { name = "imageio-ffmpeg" },
     { name = "lmdb" },
