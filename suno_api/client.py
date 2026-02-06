@@ -1,9 +1,12 @@
 """Suno API client — handles auth, generation, polling, and download."""
 
 import asyncio
+import logging
 import time
 import uuid
 import httpx
+
+logger = logging.getLogger("suno.client")
 
 
 CLERK_BASE = "https://clerk.suno.com"
@@ -36,12 +39,20 @@ class SunoClient:
         self._jwt: str | None = jwt or None
         self._jwt_ts: float = time.time() if jwt else 0
         self._http = httpx.AsyncClient(headers=HEADERS, timeout=60)
+        logger.info(
+            "SunoClient initialized (cookie=%d chars, jwt=%s, session_id=%s)",
+            len(self._cookie),
+            "provided" if jwt else "none",
+            session_id or "none",
+        )
 
     # ── auth ──────────────────────────────────────────────────────────
 
     async def _get_session_id(self) -> str:
         if self._sid:
+            logger.debug("Using cached session_id=%s", self._sid)
             return self._sid
+        logger.info("Fetching session ID from Clerk...")
         r = await self._http.get(
             f"{CLERK_BASE}/v1/client",
             params={"_clerk_js_version": CLERK_JS_VERSION},
@@ -49,10 +60,12 @@ class SunoClient:
         )
         r.raise_for_status()
         self._sid = r.json()["response"]["last_active_session_id"]
+        logger.info("Got session_id=%s", self._sid)
         return self._sid
 
     async def _refresh_token(self) -> str:
         sid = await self._get_session_id()
+        logger.info("Refreshing JWT token (session=%s)...", sid)
         r = await self._http.post(
             f"{CLERK_BASE}/v1/client/sessions/{sid}/tokens",
             params={"_clerk_js_version": CLERK_JS_VERSION},
@@ -62,11 +75,14 @@ class SunoClient:
         r.raise_for_status()
         self._jwt = r.json()["jwt"]
         self._jwt_ts = time.time()
+        logger.info("JWT refreshed (token=%s...)", self._jwt[:40] if self._jwt else "?")
         return self._jwt
 
     async def _token(self) -> str:
         """Return a valid JWT, refreshing if older than 60 s."""
-        if not self._jwt or (time.time() - self._jwt_ts > 60):
+        age = time.time() - self._jwt_ts
+        if not self._jwt or age > 60:
+            logger.info("Token stale (age=%.1fs), refreshing...", age)
             await self._refresh_token()
         return self._jwt
 
@@ -76,41 +92,54 @@ class SunoClient:
     # ── studio API helpers ────────────────────────────────────────────
 
     async def _studio_get(self, path: str, **kwargs) -> dict | list:
+        logger.info("GET %s%s", STUDIO_BASE, path)
         r = await self._http.get(
             f"{STUDIO_BASE}{path}",
             headers=await self._auth_headers(),
             **kwargs,
         )
+        logger.info("GET %s -> %d", path, r.status_code)
         if r.status_code == 401:
+            logger.warning("GET %s returned 401, refreshing token and retrying...", path)
             await self._refresh_token()
             r = await self._http.get(
                 f"{STUDIO_BASE}{path}",
                 headers=await self._auth_headers(),
                 **kwargs,
             )
+            logger.info("GET %s retry -> %d", path, r.status_code)
         r.raise_for_status()
         return r.json()
 
     async def _studio_post(self, path: str, json: dict) -> dict:
+        logger.info("POST %s%s (payload_keys=%s)", STUDIO_BASE, path, list(json.keys()))
         r = await self._http.post(
             f"{STUDIO_BASE}{path}",
             headers=await self._auth_headers(),
             json=json,
         )
+        logger.info("POST %s -> %d", path, r.status_code)
         if r.status_code == 401:
+            logger.warning("POST %s returned 401, refreshing token and retrying...", path)
             await self._refresh_token()
             r = await self._http.post(
                 f"{STUDIO_BASE}{path}",
                 headers=await self._auth_headers(),
                 json=json,
             )
+            logger.info("POST %s retry -> %d", path, r.status_code)
         r.raise_for_status()
         return r.json()
 
     # ── public methods ────────────────────────────────────────────────
 
     async def get_credits(self) -> dict:
-        return await self._studio_get("/api/billing/info/")
+        logger.info("Fetching credit balance...")
+        data = await self._studio_get("/api/billing/info/")
+        monthly_limit = data.get("monthly_limit", "?")
+        monthly_usage = data.get("monthly_usage", "?")
+        logger.info("Credits: usage=%s / limit=%s", monthly_usage, monthly_limit)
+        return data
 
     async def generate(
         self,
@@ -164,10 +193,24 @@ class SunoClient:
             payload["tags"] = tags
             payload["title"] = title
 
-        return await self._studio_post("/api/generate/v2-web/", payload)
+        logger.info(
+            "Starting generation: model=%s instrumental=%s captcha=%d chars description=%s",
+            model,
+            instrumental,
+            len(captcha_token),
+            (description or prompt)[:80],
+        )
+        data = await self._studio_post("/api/generate/v2-web/", payload)
+        clips = data.get("clips", [])
+        clip_ids = [c.get("id", "?") for c in clips]
+        logger.info("Generation started: %d clips, ids=%s", len(clips), clip_ids)
+        return data
 
     async def generate_lyrics(self, prompt: str) -> dict:
-        return await self._studio_post("/api/generate/lyrics/", {"prompt": prompt})
+        logger.info("Generating lyrics (prompt=%s)", prompt[:80])
+        data = await self._studio_post("/api/generate/lyrics/", {"prompt": prompt})
+        logger.info("Lyrics generation started: id=%s", data.get("id", "?"))
+        return data
 
     async def get_lyrics(self, lyrics_id: str) -> dict:
         return await self._studio_get(f"/api/generate/lyrics/{lyrics_id}")
@@ -175,15 +218,23 @@ class SunoClient:
     async def wait_for_lyrics(
         self, lyrics_id: str, timeout: float = 60, poll_interval: float = 2
     ) -> dict:
+        logger.info("Waiting for lyrics id=%s (timeout=%.0fs, poll=%.0fs)", lyrics_id, timeout, poll_interval)
         deadline = time.time() + timeout
+        poll_count = 0
         while time.time() < deadline:
             data = await self.get_lyrics(lyrics_id)
-            if data.get("status") == "complete":
+            poll_count += 1
+            status = data.get("status", "unknown")
+            logger.info("Lyrics poll #%d: status=%s", poll_count, status)
+            if status == "complete":
+                logger.info("Lyrics complete after %d polls", poll_count)
                 return data
             await asyncio.sleep(poll_interval)
+        logger.warning("Lyrics timed out after %.0fs (%d polls)", timeout, poll_count)
         return await self.get_lyrics(lyrics_id)
 
     async def get_songs(self, ids: list[str]) -> list[dict]:
+        logger.debug("Fetching songs: ids=%s", ids)
         return await self._studio_get("/api/feed/", params={"ids": ",".join(ids)})
 
     async def get_song(self, song_id: str) -> dict:
@@ -197,17 +248,30 @@ class SunoClient:
         poll_interval: float = 5,
     ) -> list[dict]:
         """Poll until all songs are complete or timeout."""
+        logger.info("Waiting for %d songs: ids=%s (timeout=%.0fs, poll=%.0fs)", len(ids), ids, timeout, poll_interval)
         deadline = time.time() + timeout
+        poll_count = 0
         while time.time() < deadline:
             songs = await self.get_songs(ids)
-            if all(s.get("status") == "complete" for s in songs):
+            poll_count += 1
+            statuses = [s.get("status", "unknown") for s in songs]
+            logger.info("Song poll #%d: statuses=%s", poll_count, statuses)
+            if all(s == "complete" for s in statuses):
+                audio_urls = [s.get("audio_url", "none") for s in songs]
+                logger.info(
+                    "All %d songs complete after %d polls! audio_urls=%s",
+                    len(songs), poll_count, audio_urls,
+                )
                 return songs
             await asyncio.sleep(poll_interval)
+        logger.warning("Songs timed out after %.0fs (%d polls)", timeout, poll_count)
         return await self.get_songs(ids)
 
     async def download(self, audio_url: str) -> bytes:
+        logger.info("Downloading audio: %s", audio_url)
         r = await self._http.get(audio_url)
         r.raise_for_status()
+        logger.info("Downloaded %d bytes from %s", len(r.content), audio_url)
         return r.content
 
     async def close(self):

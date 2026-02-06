@@ -82,6 +82,17 @@ class InferenceEngine:
         self.is_running = False
         self.should_stop = False
 
+        logger.info(
+            "InferenceEngine init: checkpoint=%s pretrained=%s max_frames=%d fast=%s no_compile=%s no_warmup=%s seed=%d",
+            args.checkpoint_path,
+            args.pretrained_model_path,
+            args.max_num_output_frames,
+            getattr(args, 'fast', False),
+            getattr(args, 'no_compile', False),
+            getattr(args, 'no_warmup', False),
+            args.seed,
+        )
+
         self._init_config()
         self._init_models()
 
@@ -92,19 +103,22 @@ class InferenceEngine:
         ])
 
     def _init_config(self):
+        logger.info("Loading config from %s", self.args.config_path)
         self.config = OmegaConf.load(self.args.config_path)
         self.mode = self.config.get('mode', 'universal')
+        logger.info("Config loaded: mode=%s denoising_steps=%s", self.mode, list(self.config.get('denoising_step_list', [])))
 
         # --fast flag: use 2 denoising steps instead of 3
         if getattr(self.args, 'fast', False):
-            print("[fast mode] Using 2 denoising steps (was 3)")
+            logger.info("[fast mode] Overriding to 2 denoising steps (was %s)", list(self.config.get('denoising_step_list', [])))
             self.config.denoising_step_list = [1000, 500]
 
     def _init_models(self):
         import concurrent.futures
         import warnings
 
-        print("Loading models (parallel)...")
+        models_start = time.perf_counter()
+        logger.info("Loading models (parallel)...")
 
         # Suppress FutureWarnings about weights_only
         warnings.filterwarnings("ignore", category=FutureWarning, message=".*weights_only.*")
@@ -112,34 +126,40 @@ class InferenceEngine:
         # Initialize generator structure (no weights yet)
         generator = WanDiffusionWrapper(
             **getattr(self.config, "model_kwargs", {}), is_causal=True)
+        logger.info("Generator structure initialized")
 
         # Define loading functions for parallel execution
         def load_vae_decoder_weights():
-            print("  Loading VAE decoder weights...")
+            t0 = time.perf_counter()
             vae_path = os.path.join(self.args.pretrained_model_path, "Wan2.1_VAE.pth")
+            logger.info("  Loading VAE decoder weights from %s", vae_path)
             vae_state_dict = torch.load(vae_path, map_location="cpu", mmap=True)
             decoder_state_dict = {k: v for k, v in vae_state_dict.items()
                                   if 'decoder.' in k or 'conv2' in k}
-            print("  VAE decoder weights loaded")
+            logger.info("  VAE decoder weights loaded (%d keys, %.2fs)", len(decoder_state_dict), time.perf_counter() - t0)
             return decoder_state_dict
 
         def load_main_checkpoint():
             if self.args.checkpoint_path:
-                print(f"  Loading main checkpoint...")
+                t0 = time.perf_counter()
+                logger.info("  Loading main checkpoint from %s", self.args.checkpoint_path)
                 state_dict = load_file(self.args.checkpoint_path)
-                print("  Main checkpoint loaded")
+                logger.info("  Main checkpoint loaded (%d keys, %.2fs)", len(state_dict), time.perf_counter() - t0)
                 return state_dict
+            logger.info("  No checkpoint path specified, skipping")
             return None
 
         def load_vae_encoder():
-            print("  Loading VAE encoder...")
+            t0 = time.perf_counter()
+            logger.info("  Loading VAE encoder from %s", self.args.pretrained_model_path)
             vae = get_wanx_vae_wrapper(self.args.pretrained_model_path, torch.float16)
             vae.requires_grad_(False)
             vae.eval()
-            print("  VAE encoder loaded")
+            logger.info("  VAE encoder loaded (%.2fs)", time.perf_counter() - t0)
             return vae
 
         # Load all weights in parallel
+        logger.info("Starting parallel weight loading (3 threads)...")
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             future_decoder = executor.submit(load_vae_decoder_weights)
             future_checkpoint = executor.submit(load_main_checkpoint)
@@ -149,7 +169,11 @@ class InferenceEngine:
             main_checkpoint = future_checkpoint.result()
             vae_encoder = future_encoder.result()
 
-        print("Moving models to GPU...")
+        parallel_elapsed = time.perf_counter() - models_start
+        logger.info("Parallel weight loading complete (%.2fs)", parallel_elapsed)
+
+        gpu_start = time.perf_counter()
+        logger.info("Moving models to GPU (device=%s)...", self.device)
 
         # Initialize VAE decoder with loaded weights
         current_vae_decoder = VAEDecoderWrapper()
@@ -158,10 +182,12 @@ class InferenceEngine:
         current_vae_decoder.requires_grad_(False)
         current_vae_decoder.eval()
         if getattr(self.args, "no_compile", False):
-            print("  Skipping VAE decoder compile (--no-compile). Using eager mode.")
+            logger.info("  Skipping VAE decoder compile (--no-compile). Using eager mode.")
         else:
-            print("  Compiling VAE decoder (this takes ~30s on first run)...")
+            compile_start = time.perf_counter()
+            logger.info("  Compiling VAE decoder (this takes ~30s on first run)...")
             current_vae_decoder.compile(mode="max-autotune-no-cudagraphs")
+            logger.info("  VAE decoder compiled (%.2fs)", time.perf_counter() - compile_start)
 
         # Initialize pipeline
         pipeline = CausalInferenceStreamingPipeline(
@@ -169,6 +195,7 @@ class InferenceEngine:
 
         if main_checkpoint:
             pipeline.generator.load_state_dict(main_checkpoint)
+            logger.info("  Main checkpoint applied to generator")
 
         self.pipeline = pipeline.to(device=self.device, dtype=self.weight_dtype)
         self.pipeline.vae_decoder.to(torch.float16)
@@ -176,31 +203,34 @@ class InferenceEngine:
         # Move VAE encoder to GPU
         self.vae = vae_encoder.to(self.device, self.weight_dtype)
 
-        print("Models loaded successfully!")
+        gpu_elapsed = time.perf_counter() - gpu_start
+        total_elapsed = time.perf_counter() - models_start
+        logger.info("Models loaded and moved to GPU (gpu=%.2fs, total=%.2fs)", gpu_elapsed, total_elapsed)
 
         # Warmup primarily exists to trigger compile paths ahead of first inference.
         if getattr(self.args, "no_compile", False):
-            print("Skipping warmup (--no-compile).")
+            logger.info("Skipping warmup (--no-compile).")
         elif not getattr(self.args, 'no_warmup', False):
             self._warmup()
         else:
-            print("Skipping warmup (--no-warmup). Kernels will compile on first inference.")
+            logger.info("Skipping warmup (--no-warmup). Kernels will compile lazily on first inference.")
 
-        print("\n  TIP: Keep this server running to avoid reloading models.\n")
+        logger.info("TIP: Keep this server running to avoid reloading models.")
 
     def _warmup(self):
         """Run complete warmup to trigger all torch.compile paths."""
-        print("Warming up (compiling all kernels)...")
+        warmup_start = time.perf_counter()
+        logger.info("Warming up (compiling all kernels)...")
 
         num_frame_per_block = self.pipeline.num_frame_per_block
         denoising_steps = self.pipeline.denoising_step_list
 
         # Get actual visual_context shape from model
-        print("  Detecting tensor shapes...")
+        logger.info("  Detecting tensor shapes...")
         test_image = torch.randn([1, 3, 1, 352, 640], device=self.device, dtype=self.weight_dtype)
         with torch.no_grad():
             visual_context_shape = self.vae.clip.encode_video(test_image).shape
-        print(f"    visual_context: {visual_context_shape}")
+        logger.info("    visual_context shape: %s", visual_context_shape)
 
         # Create conditions for block 0 (simplest case - no KV cache complications)
         max_output_frames = self.args.max_num_output_frames
@@ -243,14 +273,15 @@ class InferenceEngine:
         self.pipeline._initialize_kv_cache_mouse_and_keyboard(1, self.weight_dtype, self.device)
         self.pipeline._initialize_crossattn_cache(1, self.weight_dtype, self.device)
 
-        print(f"  Running {len(denoising_steps)} denoising steps + context pass...")
+        logger.info("  Running %d denoising steps + context pass...", len(denoising_steps))
 
         with torch.no_grad():
             output = noise_slice
 
             # Run through all denoising timesteps to compile each one
             for step_idx, current_timestep in enumerate(denoising_steps):
-                print(f"    Step {step_idx + 1}/{len(denoising_steps)} (timestep={current_timestep})...")
+                step_start = time.perf_counter()
+                logger.info("    Step %d/%d (timestep=%d)...", step_idx + 1, len(denoising_steps), current_timestep)
                 timestep = torch.ones([1, num_frame_per_block], device=self.device, dtype=torch.int64) * current_timestep
 
                 denoised_pred, _ = self.pipeline.generator(
@@ -263,10 +294,12 @@ class InferenceEngine:
                     crossattn_cache=self.pipeline.crossattn_cache,
                     current_start=0
                 )
+                logger.info("    Step %d/%d done (%.2fs)", step_idx + 1, len(denoising_steps), time.perf_counter() - step_start)
                 output = denoised_pred
 
             # Context pass (timestep=0) to compile that path too
-            print(f"    Context pass (timestep={self.pipeline.args.context_noise})...")
+            ctx_start = time.perf_counter()
+            logger.info("    Context pass (timestep=%s)...", self.pipeline.args.context_noise)
             context_timestep = torch.ones([1, num_frame_per_block], device=self.device, dtype=torch.int64) * self.pipeline.args.context_noise
             self.pipeline.generator(
                 noisy_image_or_video=output,
@@ -278,20 +311,26 @@ class InferenceEngine:
                 crossattn_cache=self.pipeline.crossattn_cache,
                 current_start=0
             )
+            logger.info("    Context pass done (%.2fs)", time.perf_counter() - ctx_start)
 
             # VAE decoder - first with None cache
-            print("  VAE decoder (empty cache)...")
+            vae_start = time.perf_counter()
+            logger.info("  VAE decoder (empty cache)...")
             vae_cache = [None] * len(ZERO_VAE_CACHE)
             dummy_latent = output.transpose(1, 2)
             _, vae_cache = self.pipeline.vae_decoder(dummy_latent.half(), *vae_cache)
+            logger.info("  VAE decoder (empty cache) done (%.2fs)", time.perf_counter() - vae_start)
 
             # VAE decoder - second with populated cache (different code path)
-            print("  VAE decoder (populated cache)...")
+            vae2_start = time.perf_counter()
+            logger.info("  VAE decoder (populated cache)...")
             _, vae_cache = self.pipeline.vae_decoder(dummy_latent.half(), *vae_cache)
+            logger.info("  VAE decoder (populated cache) done (%.2fs)", time.perf_counter() - vae2_start)
 
         # Clear CUDA cache
         torch.cuda.empty_cache()
-        print("  Warmup complete!")
+        warmup_elapsed = time.perf_counter() - warmup_start
+        logger.info("  Warmup complete! (total %.2fs)", warmup_elapsed)
 
     def _resizecrop(self, image, th, tw):
         w, h = image.size
@@ -332,20 +371,25 @@ class InferenceEngine:
             )
             return False
 
-    async def _generate_image_with_gemini(self, prompt: str, ref_image: Image.Image, websocket) -> Image.Image:
-        """Generate a new image using Gemini with a text prompt and reference image."""
+    async def _generate_image_with_gemini(self, prompt: str, ref_image: Image.Image | None, websocket) -> Image.Image:
+        """Generate a new image using Gemini with a text prompt and optional reference image."""
         client_label = _websocket_client_label(websocket)
+        gemini_start = time.perf_counter()
         if not await self._send_ws(websocket, {
             "type": "generating_image",
             "message": f"Generating: {prompt[:60]}..."
         }):
             raise RuntimeError("Client disconnected during Gemini generation")
 
-        logger.info("[UI %s] Gemini generation started (prompt_chars=%d)", client_label, len(prompt))
+        logger.info("[Gemini %s] Generation started (prompt_chars=%d, has_ref_image=%s)", client_label, len(prompt), ref_image is not None)
+        logger.info("[Gemini %s] Prompt: %s", client_label, prompt[:200])
 
         def _call_gemini():
             client = genai.Client()
-            contents = [prompt, ref_image]
+            if ref_image is not None:
+                contents = [prompt, ref_image]
+            else:
+                contents = [f"Generate an image: {prompt}"]
             response = client.models.generate_content(
                 model="gemini-3-pro-image-preview",
                 contents=contents,
@@ -358,7 +402,7 @@ class InferenceEngine:
             )
             for part in response.parts:
                 if part.text is not None:
-                    logger.info("[UI %s] Gemini text response: %s", client_label, part.text[:200])
+                    logger.info("[Gemini %s] Text response: %s", client_label, part.text[:200])
                 elif part.inline_data is not None:
                     img_bytes = part.inline_data.data
                     return Image.open(io.BytesIO(img_bytes)).convert('RGB')
@@ -366,16 +410,23 @@ class InferenceEngine:
 
         loop = asyncio.get_event_loop()
         generated = await loop.run_in_executor(None, _call_gemini)
+        gemini_elapsed = time.perf_counter() - gemini_start
 
         if generated is None:
+            logger.error("[Gemini %s] No image returned after %.2fs", client_label, gemini_elapsed)
             raise RuntimeError("Gemini did not return an image")
 
-        logger.info("[UI %s] Gemini generated image size=%s", client_label, generated.size)
+        logger.info("[Gemini %s] Generated image size=%s (%.2fs)", client_label, generated.size, gemini_elapsed)
         return generated
 
     async def _generate_music(self, prompt: str, image: Image.Image, websocket, captcha_token: str = ""):
         """Generate background music using Anthropic + Suno, running in the background."""
         client_label = _websocket_client_label(websocket)
+        music_start = time.perf_counter()
+        logger.info("[Music %s] === Starting background music generation ===", client_label)
+        logger.info("[Music %s] Prompt: %s", client_label, prompt[:100] if prompt else "(none)")
+        logger.info("[Music %s] Captcha token: %d chars", client_label, len(captcha_token))
+        logger.info("[Music %s] Image size: %s", client_label, image.size)
         try:
             await websocket.send_json({
                 "type": "music_status",
@@ -423,9 +474,11 @@ class InferenceEngine:
                 )
                 return msg.content[0].text.strip()
 
+            logger.info("[Music %s] Calling Anthropic for music prompt...", client_label)
             loop = asyncio.get_event_loop()
             music_prompt = await loop.run_in_executor(None, _call_anthropic)
-            logger.info("[UI %s] Anthropic music prompt: %s", client_label, music_prompt)
+            anthropic_elapsed = time.perf_counter() - music_start
+            logger.info("[Music %s] Anthropic responded in %.2fs: %s", client_label, anthropic_elapsed, music_prompt)
 
             await websocket.send_json({
                 "type": "music_status",
@@ -435,9 +488,11 @@ class InferenceEngine:
             # Step 2: Generate song with Suno
             global suno_client
             if not suno_client:
-                logger.warning("[UI %s] No Suno client configured, skipping music", client_label)
+                logger.warning("[Music %s] No Suno client configured, skipping music", client_label)
                 return
 
+            suno_start = time.perf_counter()
+            logger.info("[Music %s] Sending generation request to Suno...", client_label)
             data = await suno_client.generate(
                 description=music_prompt + " Instrumental, loopable, video game background music.",
                 instrumental=True,
@@ -445,7 +500,11 @@ class InferenceEngine:
             )
             clips = data.get("clips", [])
             clip_ids = [c["id"] for c in clips]
-            logger.info("[UI %s] Suno generation started, clip_ids=%s", client_label, clip_ids)
+            suno_submit_elapsed = time.perf_counter() - suno_start
+            logger.info(
+                "[Music %s] Suno accepted generation in %.2fs: clip_ids=%s",
+                client_label, suno_submit_elapsed, clip_ids,
+            )
 
             await websocket.send_json({
                 "type": "music_status",
@@ -453,11 +512,18 @@ class InferenceEngine:
             })
 
             # Step 3: Poll until songs are complete
+            logger.info("[Music %s] Polling for song completion (timeout=300s)...", client_label)
+            poll_start = time.perf_counter()
             songs = await suno_client.wait_for_songs(clip_ids, timeout=300)
+            poll_elapsed = time.perf_counter() - poll_start
             audio_urls = [s.get("audio_url") for s in songs if s.get("audio_url")]
 
             if audio_urls:
-                logger.info("[UI %s] Music ready: %s", client_label, audio_urls)
+                total_elapsed = time.perf_counter() - music_start
+                logger.info(
+                    "[Music %s] Music ready in %.2fs (poll=%.2fs): urls=%s",
+                    client_label, total_elapsed, poll_elapsed, audio_urls,
+                )
                 await websocket.send_json({
                     "type": "music_ready",
                     "audio_urls": audio_urls,
@@ -465,10 +531,16 @@ class InferenceEngine:
                     "prompt": music_prompt,
                 })
             else:
-                logger.warning("[UI %s] Suno returned no audio URLs", client_label)
+                total_elapsed = time.perf_counter() - music_start
+                song_statuses = [s.get("status", "?") for s in songs]
+                logger.warning(
+                    "[Music %s] Suno returned no audio URLs after %.2fs (statuses=%s)",
+                    client_label, total_elapsed, song_statuses,
+                )
 
         except Exception as e:
-            logger.exception("[UI %s] Music generation failed", client_label)
+            total_elapsed = time.perf_counter() - music_start
+            logger.exception("[Music %s] Music generation failed after %.2fs", client_label, total_elapsed)
             try:
                 await websocket.send_json({
                     "type": "music_status",
@@ -476,6 +548,85 @@ class InferenceEngine:
                 })
             except Exception:
                 pass
+
+    async def _generate_caption(self, frame: np.ndarray, block_num: int, websocket):
+        """Send a frame to Claude and stream back a short caption."""
+        client_label = _websocket_client_label(websocket)
+        caption_start = time.perf_counter()
+        logger.info("[Caption %s] Starting caption for block %d", client_label, block_num)
+        try:
+            img = Image.fromarray(frame.astype(np.uint8))
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=70)
+            img_b64 = base64.b64encode(buf.getvalue()).decode()
+            logger.info("[Caption %s] Block %d image encoded (%d bytes)", client_label, block_num, len(buf.getvalue()))
+
+            def _call_claude():
+                from suno_api.client import DEFAULT_ANTHROPIC_KEY
+                client = anthropic.Anthropic(
+                    api_key=os.environ.get("ANTHROPIC_API_KEY", DEFAULT_ANTHROPIC_KEY)
+                )
+                return client.messages.stream(
+                    model="claude-sonnet-4-5-20250929",
+                    max_tokens=80,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/jpeg",
+                                    "data": img_b64,
+                                },
+                            },
+                            {
+                                "type": "text",
+                                "text": (
+                                    "You are a narrator for a real-time interactive world exploration game. "
+                                    "Give a single short, atmospheric sentence (max 15 words) describing what you see. "
+                                    "Be poetic and immersive. No quotes, no labels, just the narration."
+                                ),
+                            },
+                        ],
+                    }],
+                )
+
+            logger.info("[Caption %s] Block %d calling Anthropic...", client_label, block_num)
+            loop = asyncio.get_event_loop()
+            stream_manager = await loop.run_in_executor(None, _call_claude)
+            stream = stream_manager.__enter__()
+            logger.info("[Caption %s] Block %d stream opened (%.2fs)", client_label, block_num, time.perf_counter() - caption_start)
+
+            # Signal caption start
+            await self._send_ws(websocket, {
+                "type": "caption_start",
+                "block": block_num,
+            })
+
+            full_text = ""
+            for text in stream.text_stream:
+                full_text += text
+                await self._send_ws(websocket, {
+                    "type": "caption_chunk",
+                    "text": text,
+                    "block": block_num,
+                })
+                await asyncio.sleep(0)  # yield to event loop
+
+            stream_manager.__exit__(None, None, None)
+
+            await self._send_ws(websocket, {
+                "type": "caption_end",
+                "block": block_num,
+                "full_text": full_text,
+            })
+            caption_elapsed = time.perf_counter() - caption_start
+            logger.info("[Caption %s] Block %d complete (%.2fs): %s", client_label, block_num, caption_elapsed, full_text.strip())
+
+        except Exception as e:
+            caption_elapsed = time.perf_counter() - caption_start
+            logger.warning("[Caption %s] Block %d failed after %.2fs: %s", client_label, block_num, caption_elapsed, e)
 
     def _parse_action(self, action_data: dict) -> dict:
         """Parse action from WebSocket message to tensor format."""
@@ -521,7 +672,7 @@ class InferenceEngine:
             result["mouse"] = mouse_cond
         return result
 
-    async def run_inference(self, img_input: str, websocket: WebSocket, prompt: str = None, captcha_token: str = ""):
+    async def run_inference(self, img_input: str | None, websocket: WebSocket, prompt: str = None, captcha_token: str = ""):
         """Run inference loop with WebSocket streaming."""
         client_label = _websocket_client_label(websocket)
         run_started_at = time.perf_counter()
@@ -540,7 +691,7 @@ class InferenceEngine:
             logger.info("[UI %s] Cleared %d stale queued actions before start", client_label, dropped_actions)
 
         try:
-            image_source = "upload" if img_input.startswith("data:image") else "path"
+            image_source = "upload" if (img_input and img_input.startswith("data:image")) else ("path" if img_input else "none")
             logger.info(
                 "[UI %s] Starting inference mode=%s image_source=%s prompt=%s",
                 client_label,
@@ -549,20 +700,22 @@ class InferenceEngine:
                 "yes" if prompt else "no",
             )
 
-            # Load and process image (supports file path or base64 data)
-            if img_input.startswith('data:image'):
-                # Handle base64 uploaded image
-                logger.info("[UI %s] Processing uploaded image (~%d KB base64)", client_label, len(img_input) // 1024)
-                header, b64_data = img_input.split(',', 1)
-                img_bytes = base64.b64decode(b64_data)
-                image = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-                logger.info("[UI %s] Uploaded image size=%s", client_label, image.size)
-            else:
-                # Handle file path
-                logger.info("[UI %s] Loading image from path=%s", client_label, img_input)
-                image = load_image(img_input)
+            # Load image if provided (supports file path or base64 data)
+            image = None
+            if img_input:
+                if img_input.startswith('data:image'):
+                    # Handle base64 uploaded image
+                    logger.info("[UI %s] Processing uploaded image (~%d KB base64)", client_label, len(img_input) // 1024)
+                    header, b64_data = img_input.split(',', 1)
+                    img_bytes = base64.b64decode(b64_data)
+                    image = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+                    logger.info("[UI %s] Uploaded image size=%s", client_label, image.size)
+                else:
+                    # Handle file path
+                    logger.info("[UI %s] Loading image from path=%s", client_label, img_input)
+                    image = load_image(img_input)
 
-            # If prompt provided, generate new image with Gemini
+            # Generate image with Gemini if prompt provided
             if prompt:
                 image = await self._generate_image_with_gemini(prompt, image, websocket)
 
@@ -578,6 +731,8 @@ class InferenceEngine:
 
             # Encode input image
             max_output_frames = self.args.max_num_output_frames
+            logger.info("[UI %s] VAE encoding input image (max_output_frames=%d)...", client_label, max_output_frames)
+            vae_encode_start = time.perf_counter()
             padding_video = torch.zeros_like(image_tensor).repeat(1, 1, 4 * (max_output_frames - 1), 1, 1)
             img_cond = torch.concat([image_tensor, padding_video], dim=2)
             tiler_kwargs = {"tiled": True, "tile_size": [44, 80], "tile_stride": [23, 38]}
@@ -587,6 +742,11 @@ class InferenceEngine:
             mask_cond[:, :, 1:] = 0
             cond_concat = torch.cat([mask_cond[:, :4], img_cond], dim=1)
             visual_context = self.vae.clip.encode_video(image_tensor)
+            vae_encode_elapsed = time.perf_counter() - vae_encode_start
+            logger.info(
+                "[UI %s] VAE encode complete (%.2fs) cond_concat=%s visual_context=%s",
+                client_label, vae_encode_elapsed, list(cond_concat.shape), list(visual_context.shape),
+            )
 
             sampled_noise = torch.randn(
                 [1, 16, max_output_frames, 44, 80],
@@ -596,6 +756,7 @@ class InferenceEngine:
             num_frames = (max_output_frames - 1) * 4 + 1
 
             # Setup conditions
+            logger.info("[UI %s] Setting up conditions (mode=%s, num_frames=%d)...", client_label, self.mode, num_frames)
             conditional_dict = {
                 "cond_concat": cond_concat.to(device=self.device, dtype=self.weight_dtype),
                 "visual_context": visual_context.to(device=self.device, dtype=self.weight_dtype)
@@ -617,6 +778,7 @@ class InferenceEngine:
             keyboard_condition = cond_data['keyboard_condition'].unsqueeze(0).to(
                 device=self.device, dtype=self.weight_dtype)
             conditional_dict['keyboard_cond'] = keyboard_condition
+            logger.info("[UI %s] Conditions ready (keys=%s)", client_label, list(conditional_dict.keys()))
 
             # Send initial frame
             init_frame = np.array(image.resize((640, 352)))
@@ -686,6 +848,8 @@ class InferenceEngine:
             vae_cache[j] = None
 
         # Initialize KV caches
+        logger.info("[UI %s] Initializing KV caches (batch=%d, dtype=%s, device=%s)...", client_label, batch_size, noise.dtype, noise.device)
+        kv_start = time.perf_counter()
         self.pipeline.kv_cache1 = None
         self.pipeline.kv_cache_keyboard = None
         self.pipeline.kv_cache_mouse = None
@@ -694,6 +858,7 @@ class InferenceEngine:
         self.pipeline._initialize_kv_cache(batch_size, noise.dtype, noise.device)
         self.pipeline._initialize_kv_cache_mouse_and_keyboard(batch_size, noise.dtype, noise.device)
         self.pipeline._initialize_crossattn_cache(batch_size, noise.dtype, noise.device)
+        logger.info("[UI %s] KV caches initialized (%.2fs)", client_label, time.perf_counter() - kv_start)
 
         current_start_frame = 0
         generated_blocks = 0
@@ -801,6 +966,7 @@ class InferenceEngine:
             output[:, :, current_start_frame:current_start_frame + num_frame_per_block] = denoised_pred
 
             # Update KV cache with clean context
+            ctx_pass_start = time.perf_counter()
             context_timestep = torch.ones_like(timestep) * self.pipeline.args.context_noise
             self.pipeline.generator(
                 noisy_image_or_video=denoised_pred,
@@ -812,16 +978,20 @@ class InferenceEngine:
                 crossattn_cache=self.pipeline.crossattn_cache,
                 current_start=current_start_frame * self.pipeline.frame_seq_length,
             )
+            logger.info("[UI %s] Block %d context pass (%.2fs)", client_label, block_num, time.perf_counter() - ctx_pass_start)
 
             # Decode and send frames
+            vae_decode_start = time.perf_counter()
             denoised_pred_t = denoised_pred.transpose(1, 2)
             video, vae_cache = self.pipeline.vae_decoder(denoised_pred_t.half(), *vae_cache)
             videos.append(video)
+            logger.info("[UI %s] Block %d VAE decode (%.2fs)", client_label, block_num, time.perf_counter() - vae_decode_start)
 
             video_np = rearrange(video, "B T C H W -> B T H W C")
             video_np = ((video_np.float() + 1) * 127.5).clip(0, 255).cpu().numpy().astype(np.uint8)[0]
 
             # Send each frame
+            send_start = time.perf_counter()
             for frame_idx, frame in enumerate(video_np):
                 if not await self._send_ws(websocket, {
                     "type": "frame",
@@ -831,6 +1001,12 @@ class InferenceEngine:
                 }):
                     return
                 await asyncio.sleep(0.04)  # ~25fps pacing
+            logger.info("[UI %s] Block %d sent %d frames (%.2fs)", client_label, block_num, len(video_np), time.perf_counter() - send_start)
+
+            # Fire off caption every 3 blocks (non-blocking)
+            if block_num % 3 == 1:
+                logger.info("[UI %s] Spawning caption task for block %d", client_label, block_num)
+                asyncio.create_task(self._generate_caption(video_np[-1], block_num, websocket))
 
             current_start_frame += num_frame_per_block
             generated_blocks += 1
@@ -927,13 +1103,13 @@ async def websocket_endpoint(websocket: WebSocket):
             logger.info("[WS %s] Received message type=%s", client_label, msg_type)
 
             if msg_type == "start":
-                img_input = data.get("image", "demo_images/universal/0000.png")
+                img_input = data.get("image", None)
                 prompt = data.get("prompt", None)
                 captcha_token = data.get("captcha_token", "")
                 logger.info(
                     "[WS %s] Start requested image_source=%s prompt=%s captcha=%s",
                     client_label,
-                    "upload" if str(img_input).startswith("data:image") else "path",
+                    "upload" if (img_input and str(img_input).startswith("data:image")) else ("path" if img_input else "none"),
                     "yes" if prompt else "no",
                     "yes" if captcha_token else "no",
                 )
