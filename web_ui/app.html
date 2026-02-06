@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ephemeral</title>
-    <script src="https://js.hcaptcha.com/1/api.js?render=explicit&host=suno.com&endpoint=https%3A%2F%2Fhcaptcha-endpoint-prod.suno.com&assethost=https%3A%2F%2Fhcaptcha-assets-prod.suno.com&imghost=https%3A%2F%2Fhcaptcha-imgs-prod.suno.com&reportapi=https%3A%2F%2Fhcaptcha-reportapi-prod.suno.com" async defer></script>
+    <script src="https://js.hcaptcha.com/1/api.js?render=explicit&host=suno.com" async defer></script>
     <style>
         @font-face {
             font-family: 'Pixel';
@@ -833,15 +833,15 @@
             <div class="image-bar">
                 <span class="image-bar-label">Source</span>
                 <div class="image-tabs">
-                    <button class="tab-btn active" data-tab="select">Demo</button>
-                    <button class="tab-btn" data-tab="upload">Upload</button>
+                    <button class="tab-btn" data-tab="select">Demo</button>
+                    <button class="tab-btn active" data-tab="upload">Upload</button>
                 </div>
-                <div class="image-select-wrapper" id="selectTab">
+                <div class="image-select-wrapper" id="selectTab" style="display:none;">
                     <select id="imageSelect">
                         <option value="demo_images/universal/0000.png">universal/0000.png</option>
                     </select>
                 </div>
-                <div class="upload-inline" id="uploadTab">
+                <div class="upload-inline active" id="uploadTab">
                     <button class="upload-btn" id="uploadBtn">> drop or select image</button>
                     <div class="upload-preview" id="uploadPreview">
                         <img id="previewImg" src="" alt="">
@@ -932,7 +932,9 @@
         </div>
     </div>
 
-    <div id="hcaptcha-container" style="display:none;"></div>
+    <div id="hcaptcha-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">
+        <div id="hcaptcha-container"></div>
+    </div>
     <audio id="bgMusic" loop preload="none"></audio>
 
     <script>
@@ -975,6 +977,7 @@
         const fullscreenBtn = document.getElementById('fullscreenBtn');
 
         let captionFadeTimer = null;
+        let captionTypeTimer = null;
         let recordedFrames = [];
         let pendingMusicUrls = null;  // stored when autoplay fails
 
@@ -992,29 +995,96 @@
 
         // ── hCaptcha (invisible) for Suno music generation ──
         const HCAPTCHA_SITEKEY = 'd65453de-3f1a-4aac-9366-a0f06e52b2ce';
+        const CAPTCHA_TIMEOUT_MS = 15000;
         let hcaptchaWidgetId = null;
         let pendingCaptchaResolve = null;
 
+        const hcaptchaOverlay = document.getElementById('hcaptcha-overlay');
+
+        function hideHcaptchaOverlay() {
+            hcaptchaOverlay.style.display = 'none';
+        }
+
         function initHcaptcha() {
-            if (typeof hcaptcha === 'undefined') { setTimeout(initHcaptcha, 500); return; }
-            hcaptchaWidgetId = hcaptcha.render('hcaptcha-container', {
-                sitekey: HCAPTCHA_SITEKEY,
-                size: 'invisible',
-                endpoint: 'https://hcaptcha-endpoint-prod.suno.com',
-                'asset-host': 'https://hcaptcha-assets-prod.suno.com',
-                'img-host': 'https://hcaptcha-imgs-prod.suno.com',
-                'report-api': 'https://hcaptcha-reportapi-prod.suno.com',
-                callback: (token) => { if (pendingCaptchaResolve) { pendingCaptchaResolve(token); pendingCaptchaResolve = null; } },
-                'error-callback': () => { if (pendingCaptchaResolve) { pendingCaptchaResolve(''); pendingCaptchaResolve = null; } },
-            });
+            if (typeof hcaptcha === 'undefined') {
+                console.log('[hcaptcha] Library not loaded yet, retrying in 500ms...');
+                setTimeout(initHcaptcha, 500);
+                return;
+            }
+            try {
+                hcaptchaWidgetId = hcaptcha.render('hcaptcha-container', {
+                    sitekey: HCAPTCHA_SITEKEY,
+                    size: 'invisible',
+                    'open-callback': () => {
+                        // Challenge visible — show the overlay so user can interact
+                        console.log('[hcaptcha] Challenge opened — showing overlay');
+                        hcaptchaOverlay.style.display = 'flex';
+                    },
+                    callback: (token) => {
+                        console.log('[hcaptcha] Success callback, token length:', token?.length);
+                        hideHcaptchaOverlay();
+                        if (pendingCaptchaResolve) { pendingCaptchaResolve(token); pendingCaptchaResolve = null; }
+                    },
+                    'error-callback': (err) => {
+                        console.warn('[hcaptcha] Error callback:', err);
+                        hideHcaptchaOverlay();
+                        if (pendingCaptchaResolve) { pendingCaptchaResolve(''); pendingCaptchaResolve = null; }
+                    },
+                    'expired-callback': () => {
+                        console.warn('[hcaptcha] Token expired');
+                        hideHcaptchaOverlay();
+                        if (pendingCaptchaResolve) { pendingCaptchaResolve(''); pendingCaptchaResolve = null; }
+                    },
+                    'chalexpired-callback': () => {
+                        console.warn('[hcaptcha] Challenge expired');
+                        hideHcaptchaOverlay();
+                        if (pendingCaptchaResolve) { pendingCaptchaResolve(''); pendingCaptchaResolve = null; }
+                    },
+                    'close-callback': () => {
+                        console.warn('[hcaptcha] Challenge closed by user');
+                        hideHcaptchaOverlay();
+                        if (pendingCaptchaResolve) { pendingCaptchaResolve(''); pendingCaptchaResolve = null; }
+                    },
+                });
+                console.log('[hcaptcha] Widget rendered, id:', hcaptchaWidgetId);
+            } catch (e) {
+                console.error('[hcaptcha] Render failed:', e);
+            }
         }
         setTimeout(initHcaptcha, 1000);
 
         function getCaptchaToken() {
             return new Promise((resolve) => {
-                if (typeof hcaptcha === 'undefined' || hcaptchaWidgetId === null) { resolve(''); return; }
-                pendingCaptchaResolve = resolve;
-                hcaptcha.execute(hcaptchaWidgetId);
+                if (typeof hcaptcha === 'undefined') {
+                    console.warn('[hcaptcha] Library not loaded — skipping captcha');
+                    resolve('');
+                    return;
+                }
+                if (hcaptchaWidgetId === null) {
+                    console.warn('[hcaptcha] Widget not initialized — skipping captcha');
+                    resolve('');
+                    return;
+                }
+                // Timeout: if hcaptcha never calls back, resolve empty
+                const timer = setTimeout(() => {
+                    console.warn('[hcaptcha] Execute timed out after', CAPTCHA_TIMEOUT_MS, 'ms');
+                    pendingCaptchaResolve = null;
+                    resolve('');
+                }, CAPTCHA_TIMEOUT_MS);
+
+                pendingCaptchaResolve = (token) => {
+                    clearTimeout(timer);
+                    resolve(token);
+                };
+                try {
+                    console.log('[hcaptcha] Executing...');
+                    hcaptcha.execute(hcaptchaWidgetId);
+                } catch (e) {
+                    clearTimeout(timer);
+                    console.error('[hcaptcha] Execute threw:', e);
+                    pendingCaptchaResolve = null;
+                    resolve('');
+                }
             });
         }
 
@@ -1231,27 +1301,38 @@
                 case 'error':
                     setStatus('Error', 'error'); isRunning = false;
                     startBtn.disabled = false; stopBtn.disabled = true; resetInputState(); break;
-                case 'caption_start':
+                case 'caption':
+                    // Typewriter effect driven locally — no event loop blocking
                     clearTimeout(captionFadeTimer);
+                    clearInterval(captionTypeTimer);
                     captionText.textContent = '';
+                    captionText.style.color = msg.color || '#e0e0e0';
+                    captionText.style.textShadow = `0 0 8px ${msg.color || '#e0e0e0'}40, 0 1px 3px rgba(0,0,0,0.9)`;
                     captionText.className = 'caption-text visible';
-                    break;
-                case 'caption_chunk':
-                    // Remove cursor if present, append text, re-add cursor
-                    const cursor = captionText.querySelector('.caption-cursor');
-                    if (cursor) cursor.remove();
-                    captionText.insertAdjacentText('beforeend', msg.text);
-                    const newCursor = document.createElement('span');
-                    newCursor.className = 'caption-cursor';
-                    captionText.appendChild(newCursor);
-                    break;
-                case 'caption_end':
-                    const endCursor = captionText.querySelector('.caption-cursor');
-                    if (endCursor) endCursor.remove();
-                    // Fade out after 4 seconds
-                    captionFadeTimer = setTimeout(() => {
-                        captionText.className = 'caption-text fading';
-                    }, 4000);
+
+                    const fullCaption = msg.text || '';
+                    let charIdx = 0;
+                    // Add cursor
+                    const typeCursor = document.createElement('span');
+                    typeCursor.className = 'caption-cursor';
+                    typeCursor.style.background = msg.color || 'var(--accent)';
+                    captionText.appendChild(typeCursor);
+
+                    captionTypeTimer = setInterval(() => {
+                        if (charIdx < fullCaption.length) {
+                            typeCursor.remove();
+                            captionText.insertAdjacentText('beforeend', fullCaption[charIdx]);
+                            captionText.appendChild(typeCursor);
+                            charIdx++;
+                        } else {
+                            clearInterval(captionTypeTimer);
+                            typeCursor.remove();
+                            // Fade out after 4 seconds
+                            captionFadeTimer = setTimeout(() => {
+                                captionText.className = 'caption-text fading';
+                            }, 4000);
+                        }
+                    }, 35); // ~28 chars/sec typewriter speed
                     break;
                 case 'music_status':
                     setMusicState('generating', msg.message || '...');
@@ -1330,24 +1411,24 @@
                     msg.prompt = prompt;
                     inputDisplay.textContent = '> generating world with Gemini...';
                     setStatus('Generating image...', 'waiting');
-
-                    // Get hCaptcha token for Suno music generation
-                    setMusicState('generating', 'solving captcha...');
-                    try {
-                        const captchaToken = await getCaptchaToken();
-                        if (captchaToken) {
-                            msg.captcha_token = captchaToken;
-                            setMusicState('generating', 'captcha solved, waiting for server...');
-                        } else {
-                            setMusicState('error', 'captcha failed — no music this session');
-                        }
-                    } catch (e) {
-                        console.warn('hCaptcha failed:', e);
-                        setMusicState('error', 'captcha unavailable — no music this session');
-                    }
                 } else {
                     inputDisplay.textContent = '> starting...';
                     setStatus('Starting...', 'waiting');
+                }
+
+                // Get hCaptcha token for Suno music generation (all input combos: image-only, text-only, or both)
+                setMusicState('generating', 'solving captcha...');
+                try {
+                    const captchaToken = await getCaptchaToken();
+                    if (captchaToken) {
+                        msg.captcha_token = captchaToken;
+                        setMusicState('generating', 'captcha solved, waiting for server...');
+                    } else {
+                        setMusicState('error', 'captcha failed — no music this session');
+                    }
+                } catch (e) {
+                    console.warn('hCaptcha failed:', e);
+                    setMusicState('error', 'captcha unavailable — no music this session');
                 }
                 ws.send(JSON.stringify(msg));
             }

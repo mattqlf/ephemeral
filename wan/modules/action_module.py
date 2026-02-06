@@ -1,3 +1,4 @@
+import os
 from typing import Any, List, Tuple, Optional, Union, Dict
 from einops import rearrange
 from flash_attn import flash_attn_func
@@ -15,11 +16,13 @@ except:
     FLASH_ATTN_3_AVAILABLE = False
 
 
-DISABLE_COMPILE = False  # get os env
-print("[compile] Compiling flex_attention in action_module.py...")
-flex_attention = torch.compile(
-    flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
-print("[compile] flex_attention (action_module) compiled.")
+if os.environ.get("MATRIX_NO_COMPILE"):
+    print("[compile] Skipping flex_attention compile in action_module.py (MATRIX_NO_COMPILE set)")
+else:
+    print("[compile] Compiling flex_attention in action_module.py...")
+    flex_attention = torch.compile(
+        flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
+    print("[compile] flex_attention (action_module) compiled.")
     
 
 class WanRMSNorm(nn.Module):

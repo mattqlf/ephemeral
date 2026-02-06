@@ -5,7 +5,12 @@ Run with: uv run python -m apps.servers.web_server --checkpoint_path Matrix-Game
 """
 
 import os
+import sys
 os.environ["GOOGLE_API_KEY"] = "AIzaSyBsBvyfplPcR3g503sehLCbkU5nLkSY05A"
+
+# Must be set before model imports — flex_attention compile checks this at import time
+if "--true-no-compile" in sys.argv:
+    os.environ["MATRIX_NO_COMPILE"] = "1"
 
 import io
 import asyncio
@@ -83,13 +88,14 @@ class InferenceEngine:
         self.should_stop = False
 
         logger.info(
-            "InferenceEngine init: checkpoint=%s pretrained=%s max_frames=%d fast=%s no_compile=%s no_warmup=%s seed=%d",
+            "InferenceEngine init: checkpoint=%s pretrained=%s max_frames=%d fast=%s no_compile=%s no_warmup=%s true_no_compile=%s seed=%d",
             args.checkpoint_path,
             args.pretrained_model_path,
             args.max_num_output_frames,
             getattr(args, 'fast', False),
             getattr(args, 'no_compile', False),
             getattr(args, 'no_warmup', False),
+            getattr(args, 'true_no_compile', False),
             args.seed,
         )
 
@@ -419,14 +425,20 @@ class InferenceEngine:
         logger.info("[Gemini %s] Generated image size=%s (%.2fs)", client_label, generated.size, gemini_elapsed)
         return generated
 
-    async def _generate_music(self, prompt: str, image: Image.Image, websocket, captcha_token: str = ""):
-        """Generate background music using Anthropic + Suno, running in the background."""
+    async def _generate_music(self, prompt: str, image: Image.Image | None, websocket, captcha_token: str = ""):
+        """Generate background music using Anthropic + Suno, running in the background.
+
+        Handles all input combinations:
+        - image only: Anthropic describes the scene visually
+        - text only: Anthropic uses the text description
+        - image + text: Anthropic uses both
+        """
         client_label = _websocket_client_label(websocket)
         music_start = time.perf_counter()
         logger.info("[Music %s] === Starting background music generation ===", client_label)
         logger.info("[Music %s] Prompt: %s", client_label, prompt[:100] if prompt else "(none)")
         logger.info("[Music %s] Captcha token: %d chars", client_label, len(captcha_token))
-        logger.info("[Music %s] Image size: %s", client_label, image.size)
+        logger.info("[Music %s] Image: %s", client_label, f"{image.size}" if image else "none")
         try:
             await websocket.send_json({
                 "type": "music_status",
@@ -434,43 +446,59 @@ class InferenceEngine:
             })
 
             # Step 1: Call Anthropic to create a Suno music prompt
-            img_buffer = io.BytesIO()
-            image.save(img_buffer, format="JPEG", quality=80)
-            img_b64 = base64.b64encode(img_buffer.getvalue()).decode()
+            img_b64 = None
+            if image:
+                img_buffer = io.BytesIO()
+                image.save(img_buffer, format="JPEG", quality=80)
+                img_b64 = base64.b64encode(img_buffer.getvalue()).decode()
 
             def _call_anthropic():
                 from suno_api.client import DEFAULT_ANTHROPIC_KEY
                 client = anthropic.Anthropic(
                     api_key=os.environ.get("ANTHROPIC_API_KEY", DEFAULT_ANTHROPIC_KEY)
                 )
+
+                # Build message content based on available inputs
+                content = []
+                if img_b64:
+                    content.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": img_b64,
+                        },
+                    })
+
+                suffix = (
+                    "Write a short Suno AI music generation prompt (2-3 sentences max) describing "
+                    "the perfect looping background music for this game world. Focus on mood, genre, "
+                    "instruments, tempo, and atmosphere. Make it instrumental. "
+                    "Output ONLY the Suno prompt, nothing else."
+                )
+
+                if image and prompt:
+                    text_part = (
+                        "You are creating a prompt for Suno AI to generate background music for a video game world. "
+                        f"Look at this game scene image (the player described it as: \"{prompt}\"). " + suffix
+                    )
+                elif image:
+                    text_part = (
+                        "You are creating a prompt for Suno AI to generate background music for a video game world. "
+                        "Look at this game scene image. " + suffix
+                    )
+                else:
+                    text_part = (
+                        "You are creating a prompt for Suno AI to generate background music for a video game world. "
+                        f"The player described the world as: \"{prompt}\". " + suffix
+                    )
+
+                content.append({"type": "text", "text": text_part})
+
                 msg = client.messages.create(
                     model="claude-sonnet-4-5-20250929",
                     max_tokens=300,
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/jpeg",
-                                    "data": img_b64,
-                                },
-                            },
-                            {
-                                "type": "text",
-                                "text": (
-                                    "You are creating a prompt for Suno AI to generate background music for a video game world. "
-                                    "Look at this game scene image"
-                                    + (f" (the player described it as: \"{prompt}\")" if prompt else "")
-                                    + ". Write a short Suno AI music generation prompt (2-3 sentences max) describing "
-                                    "the perfect looping background music for this game world. Focus on mood, genre, "
-                                    "instruments, tempo, and atmosphere. Make it instrumental. "
-                                    "Output ONLY the Suno prompt, nothing else."
-                                ),
-                            },
-                        ],
-                    }],
+                    messages=[{"role": "user", "content": content}],
                 )
                 return msg.content[0].text.strip()
 
@@ -550,7 +578,11 @@ class InferenceEngine:
                 pass
 
     async def _generate_caption(self, frame: np.ndarray, block_num: int, websocket):
-        """Send a frame to Claude and stream back a short caption."""
+        """Send a frame to Claude and get a caption + visibility-optimized color.
+
+        Runs entirely in a thread executor so the event loop (and inference) are never blocked.
+        The frontend simulates the typewriter effect locally.
+        """
         client_label = _websocket_client_label(websocket)
         caption_start = time.perf_counter()
         logger.info("[Caption %s] Starting caption for block %d", client_label, block_num)
@@ -566,9 +598,9 @@ class InferenceEngine:
                 client = anthropic.Anthropic(
                     api_key=os.environ.get("ANTHROPIC_API_KEY", DEFAULT_ANTHROPIC_KEY)
                 )
-                return client.messages.stream(
+                msg = client.messages.create(
                     model="claude-sonnet-4-5-20250929",
-                    max_tokens=80,
+                    max_tokens=100,
                     messages=[{
                         "role": "user",
                         "content": [
@@ -584,45 +616,43 @@ class InferenceEngine:
                                 "type": "text",
                                 "text": (
                                     "You are a narrator for a real-time interactive world exploration game. "
-                                    "Give a single short, atmospheric sentence (max 15 words) describing what you see. "
+                                    "Respond with EXACTLY two lines, nothing else:\n"
+                                    "Line 1: A hex color code (e.g. #FF6B35) that will be maximally visible "
+                                    "as caption text overlaid on this image. Pick a color that contrasts strongly "
+                                    "with the dominant colors in the lower portion of the image where the caption appears.\n"
+                                    "Line 2: A single short, atmospheric sentence (max 15 words) describing what you see. "
                                     "Be poetic and immersive. No quotes, no labels, just the narration."
                                 ),
                             },
                         ],
                     }],
                 )
+                return msg.content[0].text.strip()
 
             logger.info("[Caption %s] Block %d calling Anthropic...", client_label, block_num)
             loop = asyncio.get_event_loop()
-            stream_manager = await loop.run_in_executor(None, _call_claude)
-            stream = stream_manager.__enter__()
-            logger.info("[Caption %s] Block %d stream opened (%.2fs)", client_label, block_num, time.perf_counter() - caption_start)
+            result = await loop.run_in_executor(None, _call_claude)
+            api_elapsed = time.perf_counter() - caption_start
+            logger.info("[Caption %s] Block %d Anthropic responded (%.2fs): %s", client_label, block_num, api_elapsed, result)
 
-            # Signal caption start
-            await self._send_ws(websocket, {
-                "type": "caption_start",
-                "block": block_num,
-            })
-
-            full_text = ""
-            for text in stream.text_stream:
-                full_text += text
-                await self._send_ws(websocket, {
-                    "type": "caption_chunk",
-                    "text": text,
-                    "block": block_num,
-                })
-                await asyncio.sleep(0)  # yield to event loop
-
-            stream_manager.__exit__(None, None, None)
+            # Parse color and text from response
+            lines = result.strip().split('\n', 1)
+            color = "#e0e0e0"  # default fallback
+            caption_text = result
+            if len(lines) == 2 and lines[0].startswith('#') and len(lines[0]) == 7:
+                color = lines[0].strip()
+                caption_text = lines[1].strip()
+            logger.info("[Caption %s] Block %d parsed: color=%s text=%s", client_label, block_num, color, caption_text)
 
             await self._send_ws(websocket, {
-                "type": "caption_end",
+                "type": "caption",
                 "block": block_num,
-                "full_text": full_text,
+                "text": caption_text,
+                "color": color,
             })
+
             caption_elapsed = time.perf_counter() - caption_start
-            logger.info("[Caption %s] Block %d complete (%.2fs): %s", client_label, block_num, caption_elapsed, full_text.strip())
+            logger.info("[Caption %s] Block %d complete (%.2fs)", client_label, block_num, caption_elapsed)
 
         except Exception as e:
             caption_elapsed = time.perf_counter() - caption_start
@@ -1190,7 +1220,17 @@ def parse_args():
                         help="Disable torch.compile for the VAE decoder (lower startup overhead, potentially lower throughput)")
     parser.add_argument("--no-warmup", action="store_true",
                         help="Skip kernel warmup (kernels will compile lazily on first inference)")
-    return parser.parse_args()
+    parser.add_argument("--true-no-compile", action="store_true",
+                        help="Disable ALL torch.compile including flex_attention. Implies --no-compile and --no-warmup. "
+                             "Near-instant startup but significantly slower inference (~2-4x)")
+    args = parser.parse_args()
+
+    # --true-no-compile implies --no-compile and --no-warmup
+    if args.true_no_compile:
+        args.no_compile = True
+        args.no_warmup = True
+
+    return args
 
 
 if __name__ == "__main__":
