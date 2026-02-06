@@ -726,6 +726,15 @@ class InferenceEngine:
             image = self._resizecrop(image, 352, 640)
             logger.info("[UI %s] Input image normalized to %s", client_label, image.size)
 
+            # Send image preview to client (when Gemini generated the image)
+            if prompt:
+                buf = io.BytesIO()
+                image.save(buf, format='JPEG', quality=85)
+                await self._send_ws(websocket, {
+                    "type": "image_preview",
+                    "data": base64.b64encode(buf.getvalue()).decode()
+                })
+
             image_tensor = self.frame_process(image)[None, :, None, :, :].to(
                 dtype=self.weight_dtype, device=self.device)
 

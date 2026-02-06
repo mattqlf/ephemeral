@@ -159,6 +159,52 @@
             letter-spacing: 0.05em;
         }
 
+        .caption-overlay {
+            position: absolute;
+            bottom: 40px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            pointer-events: none;
+            padding: 0 30px;
+        }
+
+        .caption-text {
+            display: inline-block;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            color: #e0e0e0;
+            text-shadow: 0 0 8px rgba(0, 212, 170, 0.4), 0 1px 3px rgba(0,0,0,0.9);
+            letter-spacing: 0.04em;
+            line-height: 1.5;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .caption-text.visible {
+            opacity: 1;
+        }
+
+        .caption-text.fading {
+            opacity: 0;
+            transition: opacity 1.5s ease;
+        }
+
+        .caption-cursor {
+            display: inline-block;
+            width: 2px;
+            height: 13px;
+            background: var(--accent);
+            margin-left: 2px;
+            vertical-align: middle;
+            animation: cursor-blink 0.6s step-end infinite;
+        }
+
+        @keyframes cursor-blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
         /* Image bar */
         .image-bar {
             display: flex;
@@ -471,6 +517,49 @@
             margin-top: auto;
         }
 
+        .btn-export {
+            background: transparent;
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .btn-export:hover:not(:disabled) {
+            background: var(--accent);
+            color: var(--bg);
+        }
+
+        .export-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            background: rgba(0, 212, 170, 0.05);
+            border: 1px solid var(--border);
+            margin-top: 6px;
+        }
+
+        .export-label {
+            font-family: 'Courier New', monospace;
+            font-size: 9px;
+            color: var(--accent);
+            opacity: 0.8;
+            flex: 1;
+        }
+
+        .export-progress {
+            width: 100%;
+            height: 2px;
+            background: var(--border);
+            margin-top: 4px;
+        }
+
+        .export-progress-bar {
+            height: 100%;
+            background: var(--accent);
+            width: 0%;
+            transition: width 0.1s;
+        }
+
         .btn {
             flex: 1;
             padding: 10px 14px;
@@ -504,6 +593,115 @@
         }
 
         #fileInput { display: none; }
+
+        /* Fullscreen */
+        .fullscreen-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: var(--text-dim);
+            padding: 5px 8px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            z-index: 5;
+            transition: all 0.2s;
+            line-height: 1;
+        }
+
+        .fullscreen-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: rgba(0, 0, 0, 0.6);
+        }
+
+        .fullscreen-controls {
+            display: none;
+        }
+
+        .video-container:fullscreen {
+            border: none;
+        }
+
+        .video-container:fullscreen .fullscreen-controls {
+            display: flex;
+            position: absolute;
+            bottom: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            align-items: center;
+            gap: 16px;
+            padding: 10px 16px;
+            background: rgba(0, 0, 0, 0.25);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            z-index: 10;
+            opacity: 0.5;
+            transition: opacity 0.3s;
+        }
+
+        .video-container:fullscreen .fullscreen-controls:hover {
+            opacity: 1;
+        }
+
+        .fullscreen-controls .key-grid {
+            gap: 2px;
+        }
+
+        .fullscreen-controls .key {
+            width: 32px;
+            height: 32px;
+            font-size: 10px;
+            background: rgba(21, 21, 21, 0.5);
+            border-color: rgba(51, 51, 51, 0.5);
+        }
+
+        .fullscreen-controls .key-hint {
+            font-size: 6px;
+        }
+
+        .fullscreen-controls .fs-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+
+        .fullscreen-controls .fs-btn {
+            padding: 5px 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border: 1px solid rgba(42, 42, 42, 0.5);
+            background: rgba(0, 0, 0, 0.3);
+            color: rgba(224, 224, 224, 0.7);
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+
+        .fullscreen-controls .fs-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .video-container:fullscreen .caption-overlay {
+            bottom: 170px;
+            padding: 0 80px;
+        }
+
+        .video-container:fullscreen .caption-text {
+            font-size: 16px;
+            line-height: 1.6;
+        }
+
+        .video-container:fullscreen .fullscreen-btn {
+            top: 20px;
+            right: 20px;
+        }
     </style>
 </head>
 <body>
@@ -527,8 +725,44 @@
         <div class="video-section">
             <div class="video-container">
                 <canvas id="videoCanvas" width="640" height="352"></canvas>
+                <div class="caption-overlay">
+                    <span class="caption-text" id="captionText"></span>
+                </div>
                 <div class="video-overlay">
                     <span id="inputDisplay">> waiting for input...</span>
+                </div>
+                <button class="fullscreen-btn" id="fullscreenBtn" title="Toggle fullscreen">&#x26F6;</button>
+                <div class="fullscreen-controls">
+                    <div>
+                        <div class="key-grid">
+                            <div class="key empty"></div>
+                            <div class="key" data-key="i" data-type="camera"><span>I</span><span class="key-hint">up</span></div>
+                            <div class="key empty"></div>
+                            <div class="key" data-key="j" data-type="camera"><span>J</span><span class="key-hint">left</span></div>
+                            <div class="key" data-key="u" data-type="camera"><span>U</span><span class="key-hint">none</span></div>
+                            <div class="key" data-key="l" data-type="camera"><span>L</span><span class="key-hint">right</span></div>
+                            <div class="key empty"></div>
+                            <div class="key" data-key="k" data-type="camera"><span>K</span><span class="key-hint">down</span></div>
+                            <div class="key empty"></div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="key-grid">
+                            <div class="key empty"></div>
+                            <div class="key" data-key="w" data-type="movement"><span>W</span><span class="key-hint">fwd</span></div>
+                            <div class="key empty"></div>
+                            <div class="key" data-key="a" data-type="movement"><span>A</span><span class="key-hint">left</span></div>
+                            <div class="key" data-key="q" data-type="movement"><span>Q</span><span class="key-hint">none</span></div>
+                            <div class="key" data-key="d" data-type="movement"><span>D</span><span class="key-hint">right</span></div>
+                            <div class="key empty"></div>
+                            <div class="key" data-key="s" data-type="movement"><span>S</span><span class="key-hint">back</span></div>
+                            <div class="key empty"></div>
+                        </div>
+                    </div>
+                    <div class="fs-actions">
+                        <button class="fs-btn" id="fsStopBtn">Stop</button>
+                        <button class="fs-btn" id="fsExitBtn">Exit</button>
+                    </div>
                 </div>
             </div>
 
@@ -616,6 +850,14 @@
             <div class="action-buttons">
                 <button class="btn btn-primary" id="startBtn">> Start</button>
                 <button class="btn" id="stopBtn" disabled>Stop</button>
+                <button class="btn btn-export" id="exportBtn" disabled style="display:none;">> Export</button>
+            </div>
+
+            <div class="export-bar" id="exportBar" style="display:none;">
+                <div style="flex:1;">
+                    <span class="export-label" id="exportLabel">timelapse: ready</span>
+                    <div class="export-progress"><div class="export-progress-bar" id="exportProgress"></div></div>
+                </div>
             </div>
 
             <div class="music-bar" id="musicBar" style="display:none;">
@@ -657,6 +899,15 @@
         const bgMusic = document.getElementById('bgMusic');
         const musicBar = document.getElementById('musicBar');
         const musicLabel = document.getElementById('musicLabel');
+        const captionText = document.getElementById('captionText');
+        const exportBtn = document.getElementById('exportBtn');
+        const exportBar = document.getElementById('exportBar');
+        const exportLabel = document.getElementById('exportLabel');
+        const exportProgress = document.getElementById('exportProgress');
+        const fullscreenBtn = document.getElementById('fullscreenBtn');
+
+        let captionFadeTimer = null;
+        let recordedFrames = [];
 
         // ── hCaptcha (invisible) for Suno music generation ──
         const HCAPTCHA_SITEKEY = 'd65453de-3f1a-4aac-9366-a0f06e52b2ce';
@@ -795,13 +1046,13 @@
         }
 
         function updateKeyStates() {
-            // Enable all keys when waiting for input
+            // Enable all keys when waiting for input (both sidebar and fullscreen overlay)
             const enabled = inputStep === 1;
-            cameraSection.querySelectorAll('.key:not(.empty)').forEach(k => {
+            document.querySelectorAll('.key[data-type="camera"]:not(.empty)').forEach(k => {
                 k.classList.toggle('disabled', !enabled);
                 k.classList.remove('active');
             });
-            movementSection.querySelectorAll('.key:not(.empty)').forEach(k => {
+            document.querySelectorAll('.key[data-type="movement"]:not(.empty)').forEach(k => {
                 k.classList.toggle('disabled', !enabled);
                 k.classList.remove('active');
             });
@@ -844,8 +1095,10 @@
         }
 
         function highlightKey(key, type) {
-            const el = document.querySelector(`.key[data-key="${key}"][data-type="${type}"]`);
-            if (el) { el.classList.add('active'); setTimeout(() => el.classList.remove('active'), 200); }
+            document.querySelectorAll(`.key[data-key="${key}"][data-type="${type}"]`).forEach(el => {
+                el.classList.add('active');
+                setTimeout(() => el.classList.remove('active'), 200);
+            });
         }
 
         function sendAction() {
@@ -874,13 +1127,51 @@
                     setStatus('Gemini generating...', 'waiting');
                     inputDisplay.textContent = `> ${msg.message || 'generating world with Gemini...'}`;
                     break;
+                case 'image_preview': {
+                    const previewImage = new Image();
+                    previewImage.onload = () => ctx.drawImage(previewImage, 0, 0, canvas.width, canvas.height);
+                    previewImage.src = 'data:image/jpeg;base64,' + msg.data;
+                    inputDisplay.textContent = '> image generated, starting inference...';
+                    setStatus('Encoding...', 'waiting');
+                    break;
+                }
                 case 'complete': case 'stopped':
                     setStatus(msg.type === 'complete' ? 'Complete' : 'Stopped', 'connected');
                     isRunning = false; startBtn.disabled = false; stopBtn.disabled = true;
-                    resetInputState(); inputDisplay.textContent = `> ${msg.type}`; break;
+                    resetInputState(); inputDisplay.textContent = `> ${msg.type}`;
+                    if (recordedFrames.length > 1) {
+                        exportBtn.style.display = '';
+                        exportBtn.disabled = false;
+                        exportBar.style.display = 'flex';
+                        exportLabel.textContent = `timelapse: ${recordedFrames.length} frames ready`;
+                        exportProgress.style.width = '0%';
+                    }
+                    break;
                 case 'error':
                     setStatus('Error', 'error'); isRunning = false;
                     startBtn.disabled = false; stopBtn.disabled = true; resetInputState(); break;
+                case 'caption_start':
+                    clearTimeout(captionFadeTimer);
+                    captionText.textContent = '';
+                    captionText.className = 'caption-text visible';
+                    break;
+                case 'caption_chunk':
+                    // Remove cursor if present, append text, re-add cursor
+                    const cursor = captionText.querySelector('.caption-cursor');
+                    if (cursor) cursor.remove();
+                    captionText.insertAdjacentText('beforeend', msg.text);
+                    const newCursor = document.createElement('span');
+                    newCursor.className = 'caption-cursor';
+                    captionText.appendChild(newCursor);
+                    break;
+                case 'caption_end':
+                    const endCursor = captionText.querySelector('.caption-cursor');
+                    if (endCursor) endCursor.remove();
+                    // Fade out after 4 seconds
+                    captionFadeTimer = setTimeout(() => {
+                        captionText.className = 'caption-text fading';
+                    }, 4000);
+                    break;
                 case 'music_status':
                     musicBar.style.display = 'flex';
                     musicLabel.textContent = `music: ${msg.message || '...'}`;
@@ -899,7 +1190,10 @@
 
         function displayFrame(b64) {
             const img = new Image();
-            img.onload = () => ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            img.onload = () => {
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                recordedFrames.push(b64);
+            };
             img.src = 'data:image/jpeg;base64,' + b64;
         }
 
@@ -925,11 +1219,23 @@
                 resetInputState();
                 bgMusic.pause(); bgMusic.src = '';
                 musicBar.style.display = 'none';
+                recordedFrames = [];
+                exportBtn.style.display = 'none';
+                exportBar.style.display = 'none';
 
                 const prompt = promptInput.value.trim();
                 const isUpload = document.querySelector('[data-tab="upload"]').classList.contains('active');
-                const image = isUpload && uploadedImageData ? uploadedImageData : imageSelect.value;
-                const msg = { type: 'start', image };
+                const image = isUpload ? (uploadedImageData || null) : imageSelect.value;
+
+                // Case 4: no image and no text → block start
+                if (!image && !prompt) {
+                    inputDisplay.textContent = '> provide an image or prompt to start';
+                    isRunning = false; startBtn.disabled = false; stopBtn.disabled = true;
+                    return;
+                }
+
+                const msg = { type: 'start' };
+                if (image) msg.image = image;
 
                 if (prompt) {
                     msg.prompt = prompt;
@@ -959,6 +1265,66 @@
             }
         });
 
+        // ── Timelapse export ──
+        exportBtn.addEventListener('click', () => exportTimelapse());
+
+        async function exportTimelapse() {
+            if (recordedFrames.length < 2) return;
+            exportBtn.disabled = true;
+            exportLabel.textContent = 'timelapse: encoding...';
+            exportProgress.style.width = '0%';
+
+            const fps = 25;
+            const exportCanvas = document.createElement('canvas');
+            exportCanvas.width = 640;
+            exportCanvas.height = 352;
+            const exportCtx = exportCanvas.getContext('2d');
+
+            const stream = exportCanvas.captureStream(0); // manual frame push
+            const recorder = new MediaRecorder(stream, {
+                mimeType: 'video/webm;codecs=vp9',
+                videoBitsPerSecond: 4_000_000,
+            });
+
+            const chunks = [];
+            recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+
+            const done = new Promise((resolve) => { recorder.onstop = resolve; });
+            recorder.start();
+
+            const total = recordedFrames.length;
+            for (let i = 0; i < total; i++) {
+                const img = new Image();
+                await new Promise((resolve) => {
+                    img.onload = resolve;
+                    img.src = 'data:image/jpeg;base64,' + recordedFrames[i];
+                });
+                exportCtx.drawImage(img, 0, 0, 640, 352);
+                stream.getVideoTracks()[0].requestFrame();
+                // Pace at target fps
+                await new Promise((r) => setTimeout(r, 1000 / fps));
+                // Update progress
+                const pct = Math.round(((i + 1) / total) * 100);
+                exportProgress.style.width = pct + '%';
+                exportLabel.textContent = `timelapse: encoding ${pct}%`;
+            }
+
+            recorder.stop();
+            await done;
+
+            const blob = new Blob(chunks, { type: 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `ephemeral-timelapse-${Date.now()}.webm`;
+            a.click();
+            URL.revokeObjectURL(url);
+
+            exportLabel.textContent = `timelapse: exported (${(blob.size / 1024 / 1024).toFixed(1)} MB)`;
+            exportProgress.style.width = '100%';
+            exportBtn.disabled = false;
+        }
+
         // Resize canvas to fill container while maintaining aspect ratio
         function resizeCanvas() {
             const container = document.querySelector('.video-container');
@@ -983,6 +1349,31 @@
 
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
+
+        // ── Fullscreen ──
+        function toggleFullscreen() {
+            const container = document.querySelector('.video-container');
+            if (document.fullscreenElement) {
+                document.exitFullscreen();
+            } else {
+                container.requestFullscreen();
+            }
+        }
+
+        fullscreenBtn.addEventListener('click', toggleFullscreen);
+        document.getElementById('fsExitBtn').addEventListener('click', () => document.exitFullscreen());
+        document.getElementById('fsStopBtn').addEventListener('click', () => {
+            if (ws?.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'stop' }));
+                setStatus('Stopping...', 'waiting');
+                bgMusic.pause();
+            }
+        });
+
+        document.addEventListener('fullscreenchange', () => {
+            fullscreenBtn.textContent = document.fullscreenElement ? '\u2715' : '\u26F6';
+            resizeCanvas();
+        });
 
         loadImages();
         connect();
