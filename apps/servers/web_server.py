@@ -137,14 +137,14 @@ class InferenceEngine:
         self.should_stop = False
 
         logger.info(
-            "InferenceEngine init: checkpoint=%s pretrained=%s max_frames=%d fast=%s no_compile=%s no_warmup=%s true_no_compile=%s seed=%d",
+            "InferenceEngine init: checkpoint=%s pretrained=%s max_frames=%d resolution=%dx%d fast=%s no_compile=%s seed=%d",
             args.checkpoint_path,
             args.pretrained_model_path,
             args.max_num_output_frames,
+            args.res_width,
+            args.res_height,
             getattr(args, 'fast', False),
             getattr(args, 'no_compile', False),
-            getattr(args, 'no_warmup', False),
-            getattr(args, 'true_no_compile', False),
             args.seed,
         )
 
@@ -152,7 +152,7 @@ class InferenceEngine:
         self._init_models()
 
         self.frame_process = v2.Compose([
-            v2.Resize(size=(352, 640), antialias=True),
+            v2.Resize(size=(self.res_height, self.res_width), antialias=True),
             v2.ToTensor(),
             v2.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
         ])
@@ -162,6 +162,25 @@ class InferenceEngine:
         self.config = OmegaConf.load(self.args.config_path)
         self.mode = self.config.get('mode', 'universal')
         logger.info("Config loaded: mode=%s denoising_steps=%s", self.mode, list(self.config.get('denoising_step_list', [])))
+
+        # Store resolution for use throughout the engine
+        self.res_width = self.args.res_width
+        self.res_height = self.args.res_height
+        self.latent_w = self.args.latent_w
+        self.latent_h = self.args.latent_h
+        logger.info("Resolution: %dx%d (latent %dx%d)", self.res_width, self.res_height, self.latent_w, self.latent_h)
+
+        # Override image_or_video_shape with resolved latent dimensions
+        shape = list(self.config.image_or_video_shape)
+        shape[3] = self.latent_h
+        shape[4] = self.latent_w
+        self.config.image_or_video_shape = shape
+        logger.info("image_or_video_shape: %s", shape)
+
+        # --num-frames: override frames per block
+        if self.args.num_frames is not None:
+            logger.info("Overriding num_frame_per_block: %d -> %d", self.config.num_frame_per_block, self.args.num_frames)
+            self.config.num_frame_per_block = self.args.num_frames
 
         # --fast flag: use 2 denoising steps instead of 3
         if getattr(self.args, 'fast', False):
@@ -282,7 +301,7 @@ class InferenceEngine:
 
         # Get actual visual_context shape from model
         logger.info("  Detecting tensor shapes...")
-        test_image = torch.randn([1, 3, 1, 352, 640], device=self.device, dtype=self.weight_dtype)
+        test_image = torch.randn([1, 3, 1, self.res_height, self.res_width], device=self.device, dtype=self.weight_dtype)
         with torch.no_grad():
             visual_context_shape = self.vae.clip.encode_video(test_image).shape
         logger.info("    visual_context shape: %s", visual_context_shape)
@@ -292,7 +311,7 @@ class InferenceEngine:
         num_frames = (max_output_frames - 1) * 4 + 1
 
         full_cond_concat = torch.randn(
-            [1, 20, max_output_frames, 44, 80],
+            [1, 20, max_output_frames, self.latent_h, self.latent_w],
             device=self.device, dtype=self.weight_dtype
         )
         full_visual_context = torch.randn(
@@ -308,7 +327,7 @@ class InferenceEngine:
             device=self.device, dtype=self.weight_dtype
         )
         sampled_noise = torch.randn(
-            [1, 16, max_output_frames, 44, 80],
+            [1, 16, max_output_frames, self.latent_h, self.latent_w],
             device=self.device, dtype=self.weight_dtype
         )
 
@@ -869,7 +888,7 @@ class InferenceEngine:
             if prompt:
                 image = await self._generate_image_with_gemini(prompt, image, websocket)
 
-            image = self._resizecrop(image, 352, 640)
+            image = self._resizecrop(image, self.res_height, self.res_width)
             logger.info("[UI %s] Input image normalized to %s", client_label, image.size)
 
             # Send image preview to client (when Gemini generated the image)
@@ -890,7 +909,7 @@ class InferenceEngine:
             vae_encode_start = time.perf_counter()
             padding_video = torch.zeros_like(image_tensor).repeat(1, 1, 4 * (max_output_frames - 1), 1, 1)
             img_cond = torch.concat([image_tensor, padding_video], dim=2)
-            tiler_kwargs = {"tiled": True, "tile_size": [44, 80], "tile_stride": [23, 38]}
+            tiler_kwargs = {"tiled": True, "tile_size": [self.latent_h, self.latent_w], "tile_stride": [(self.latent_h + 1) // 2, (self.latent_w + 1) // 2]}
             img_cond = self.vae.encode(img_cond, device=self.device, **tiler_kwargs).to(self.device)
 
             mask_cond = torch.ones_like(img_cond)
@@ -904,7 +923,7 @@ class InferenceEngine:
             )
 
             sampled_noise = torch.randn(
-                [1, 16, max_output_frames, 44, 80],
+                [1, 16, max_output_frames, self.latent_h, self.latent_w],
                 device=self.device, dtype=self.weight_dtype
             )
 
@@ -936,7 +955,7 @@ class InferenceEngine:
             logger.info("[UI %s] Conditions ready (keys=%s)", client_label, list(conditional_dict.keys()))
 
             # Send initial frame
-            init_frame = np.array(image.resize((640, 352)))
+            init_frame = np.array(image.resize((self.res_width, self.res_height)))
             if not await self._send_ws(websocket, {
                 "type": "frame",
                 "data": self._frame_to_base64(init_frame),
@@ -948,6 +967,7 @@ class InferenceEngine:
             if not await self._send_ws(websocket, {
                 "type": "ready",
                 "mode": self.mode,
+                "resolution": f"{self.res_width}x{self.res_height}",
                 "message": "Ready for input. Press keys to control."
             }):
                 return
@@ -1494,6 +1514,10 @@ def parse_args():
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--fast", action="store_true",
                         help="Use 2 denoising steps instead of 3 for faster inference (~33%% speedup, slight quality loss)")
+    parser.add_argument("--resolution", type=str, default="640x352",
+                        help="Output resolution WxH. Supported: 640x352 (default), 832x480, 1280x720, 480x832, 720x1280")
+    parser.add_argument("--num-frames", type=int, default=None,
+                        help="Frames per generation block (default: from config, typically 3). Higher = more temporal context per block")
     parser.add_argument("--no-compile", action="store_true",
                         help="Disable torch.compile for the VAE decoder (lower startup overhead, potentially lower throughput)")
     parser.add_argument("--no-warmup", action="store_true",
@@ -1502,6 +1526,16 @@ def parse_args():
                         help="Disable ALL torch.compile including flex_attention. Implies --no-compile and --no-warmup. "
                              "Near-instant startup but significantly slower inference (~2-4x)")
     args = parser.parse_args()
+
+    # Parse resolution
+    try:
+        w, h = args.resolution.split('x')
+        args.res_width, args.res_height = int(w), int(h)
+        if args.res_width % 8 != 0 or args.res_height % 8 != 0:
+            parser.error(f"Resolution {args.resolution} must be divisible by 8 (VAE stride)")
+        args.latent_w, args.latent_h = args.res_width // 8, args.res_height // 8
+    except ValueError:
+        parser.error(f"Invalid resolution format: {args.resolution}. Use WxH (e.g. 832x480)")
 
     # --true-no-compile implies --no-compile and --no-warmup
     if args.true_no_compile:

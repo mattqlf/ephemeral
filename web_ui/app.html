@@ -902,7 +902,7 @@
 
             <div class="header-meta">
                 <span>Block: <strong id="blockNum">0</strong></span>
-                <span>640x352</span>
+                <span id="resDisplay">640x352</span>
             </div>
 
             <div class="status-badge">
@@ -1124,6 +1124,10 @@
         let captionTypeTimer = null;
         let recordedFrames = [];
         let pendingMusicUrls = null;  // stored when autoplay fails
+        let lastSentKeyboard = 'q';
+        let lastSentMouse = 'u';
+        let activeCaptionText = '';
+        let activeCaptionColor = '';
 
         function setMusicState(state, text) {
             // state: 'generating' | 'error' | 'playing' | 'paused' | 'idle'
@@ -1399,6 +1403,8 @@
         function sendAction() {
             if (ws?.readyState === WebSocket.OPEN && currentCamera && currentMovement) {
                 ws.send(JSON.stringify({ type: 'action', keyboard: currentMovement, mouse: currentCamera }));
+                lastSentKeyboard = currentMovement;
+                lastSentMouse = currentCamera;
                 setStatus('Processing...', 'waiting');
             }
         }
@@ -1414,8 +1420,11 @@
 
         function handleMessage(msg) {
             switch (msg.type) {
-                case 'frame': displayFrame(msg.data); blockNum.textContent = msg.block; break;
-                case 'ready': setStatus('Ready', 'waiting'); break;
+                case 'frame': displayFrame(msg.data, msg.block); blockNum.textContent = msg.block; break;
+                case 'ready':
+                    setStatus('Ready', 'waiting');
+                    if (msg.resolution) document.getElementById('resDisplay').textContent = msg.resolution;
+                    break;
                 case 'request_action': setStatus(`Block ${msg.block}`, 'waiting'); startInputSequence(); break;
                 case 'block_complete': setStatus(`Block ${msg.block} done`, 'connected'); resetInputState(); break;
                 case 'generating_image':
@@ -1456,6 +1465,8 @@
                     captionText.className = 'caption-text visible';
 
                     const fullCaption = msg.text || '';
+                    activeCaptionText = fullCaption;
+                    activeCaptionColor = msg.color || '#e0e0e0';
                     let charIdx = 0;
                     // Add cursor
                     const typeCursor = document.createElement('span');
@@ -1475,6 +1486,8 @@
                             // Fade out after 4 seconds
                             captionFadeTimer = setTimeout(() => {
                                 captionText.className = 'caption-text fading';
+                                activeCaptionText = '';
+                                activeCaptionColor = '';
                             }, 4000);
                         }
                     }, 35); // ~28 chars/sec typewriter speed
@@ -1484,11 +1497,15 @@
                     roomBtn.textContent = '> Close Room';
                     roomBtn.classList.add('active');
                     roomPanel.classList.add('visible');
-                    roomUrl.textContent = msg.url;
+                    // Build URL client-side so it uses the host the browser actually connected to
+                    // (avoids Docker internal IPs like 172.18.x.x in the QR code)
+                    const roomPath = new URL(msg.url).pathname;
+                    const publicRoomUrl = location.origin + roomPath;
+                    roomUrl.textContent = publicRoomUrl;
                     roomPlayers.textContent = `${msg.player_count} player${msg.player_count !== 1 ? 's' : ''}`;
                     // Generate QR code
                     const qr = qrcode(0, 'M');
-                    qr.addData(msg.url);
+                    qr.addData(publicRoomUrl);
                     qr.make();
                     roomQr.innerHTML = qr.createImgTag(3, 0);
                     break;
@@ -1523,11 +1540,18 @@
             }
         }
 
-        function displayFrame(b64) {
+        function displayFrame(b64, block) {
             const img = new Image();
             img.onload = () => {
                 ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                recordedFrames.push(b64);
+                recordedFrames.push({
+                    b64,
+                    block,
+                    keyboard: lastSentKeyboard,
+                    mouse: lastSentMouse,
+                    caption: activeCaptionText,
+                    captionColor: activeCaptionColor,
+                });
             };
             img.src = 'data:image/jpeg;base64,' + b64;
         }
@@ -1695,12 +1719,58 @@
 
             const total = recordedFrames.length;
             for (let i = 0; i < total; i++) {
+                const frame = recordedFrames[i];
                 const img = new Image();
                 await new Promise((resolve) => {
                     img.onload = resolve;
-                    img.src = 'data:image/jpeg;base64,' + recordedFrames[i];
+                    img.src = 'data:image/jpeg;base64,' + frame.b64;
                 });
                 exportCtx.drawImage(img, 0, 0, 640, 352);
+
+                // ── Action badge (bottom-left) ──
+                const kb = frame.keyboard || 'q';
+                const ms = frame.mouse || 'u';
+                if (kb !== 'q' || ms !== 'u') {
+                    const kbLabel = KEY_LABELS[kb] || kb.toUpperCase();
+                    const msLabel = KEY_LABELS[ms] || ms.toUpperCase();
+                    let badgeText;
+                    if (kbLabel !== '-' && msLabel !== '-') badgeText = `${kbLabel} + ${msLabel}`;
+                    else if (kbLabel !== '-') badgeText = kbLabel;
+                    else badgeText = msLabel;
+
+                    exportCtx.font = '14px "Courier New", monospace';
+                    const textW = exportCtx.measureText(badgeText).width;
+                    const padX = 8, padY = 4, radius = 4;
+                    const bx = 10, by = 352 - 10 - (14 + padY * 2);
+                    const bw = textW + padX * 2, bh = 14 + padY * 2;
+
+                    exportCtx.fillStyle = 'rgba(0,0,0,0.6)';
+                    exportCtx.beginPath();
+                    exportCtx.roundRect(bx, by, bw, bh, radius);
+                    exportCtx.fill();
+
+                    exportCtx.fillStyle = '#ffffff';
+                    exportCtx.textBaseline = 'middle';
+                    exportCtx.textAlign = 'left';
+                    exportCtx.fillText(badgeText, bx + padX, by + bh / 2);
+                }
+
+                // ── Caption text (bottom-center) ──
+                if (frame.caption) {
+                    exportCtx.font = '14px "Courier New", monospace';
+                    exportCtx.textAlign = 'center';
+                    exportCtx.textBaseline = 'alphabetic';
+                    const cx = 320, cy = 352 - 30;
+
+                    exportCtx.strokeStyle = '#000000';
+                    exportCtx.lineWidth = 3;
+                    exportCtx.lineJoin = 'round';
+                    exportCtx.strokeText(frame.caption, cx, cy);
+
+                    exportCtx.fillStyle = frame.captionColor || '#e0e0e0';
+                    exportCtx.fillText(frame.caption, cx, cy);
+                }
+
                 stream.getVideoTracks()[0].requestFrame();
                 // Pace at target fps
                 await new Promise((r) => setTimeout(r, 1000 / fps));

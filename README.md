@@ -52,9 +52,7 @@ Launch the web UI:
 
 ```bash
 uv run python -m apps.servers.web_server \
-    --config_path configs/inference_yaml/inference_universal.yaml \
     --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
-    --pretrained_model_path Matrix-Game-2.0 \
     --port 8888 \
     --no-compile
 ```
@@ -65,6 +63,9 @@ Then open `http://<your-server-ip>:8888` in your browser.
 
 | Flag | Description |
 |------|-------------|
+| `--resolution WxH` | Output resolution (default: `640x352`). Supported: `832x480`, `1280x720`, `480x832`, `720x1280` |
+| `--num-frames N` | Frames per generation block (default: 3). Higher = more temporal context per block |
+| `--fast` | Use 2 denoising steps instead of 3 (~33% faster, slight quality loss) |
 | `--no-compile` | Skip torch.compile for faster startup (implies --no-warmup) |
 | `--port` | Server port (default: 8080) |
 
@@ -160,6 +161,7 @@ uv run python -m apps.launchers.launch_tp_speculative --num_gpus 6 \
 
 - Keep the server running to avoid reloading models (~2-3 min startup)
 - Upward camera movement may cause brief glitches — adjust direction to resolve
+- Use `--resolution 832x480` on H200/B200 for higher quality at the cost of speed
 - The `--fast` flag is recommended for interactive use
 
 ## License
