@@ -6,6 +6,11 @@ Run with: uv run python -m apps.servers.web_server --checkpoint_path Matrix-Game
 
 import os
 import sys
+import time as _time
+
+_t0 = _time.perf_counter()
+print("[startup] Loading modules...", flush=True)
+
 os.environ["GOOGLE_API_KEY"] = "AIzaSyBsBvyfplPcR3g503sehLCbkU5nLkSY05A"
 
 # Must be set before model imports — flex_attention compile checks this at import time
@@ -27,12 +32,17 @@ from dataclasses import dataclass, field
 from queue import Queue, Empty
 from typing import Optional
 
+_t1 = _time.perf_counter()
+print(f"[startup] Importing torch... ({_t1 - _t0:.1f}s so far)", flush=True)
 import torch
 import torch._dynamo
 
 # Increase dynamo cache size to prevent VAE cache thrashing
 torch._dynamo.config.cache_size_limit = 64
 import numpy as np
+
+_t2 = _time.perf_counter()
+print(f"[startup] Importing model pipeline... ({_t2 - _t0:.1f}s so far)", flush=True)
 from demo_utils.constant import ZERO_VAE_CACHE
 from PIL import Image
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -58,6 +68,9 @@ from google.genai import types as genai_types
 
 import anthropic
 from suno_api.client import SunoClient
+
+_t3 = _time.perf_counter()
+print(f"[startup] All modules loaded ({_t3 - _t0:.1f}s)", flush=True)
 
 app = FastAPI(title="Matrix-Game 2.0 Web UI")
 logger = logging.getLogger("ephemeral.web")
