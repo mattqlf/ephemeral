@@ -824,9 +824,8 @@ class InferenceEngine:
                                 "text": (
                                     "You are a narrator for a real-time interactive world exploration game. "
                                     "Respond with EXACTLY two lines, nothing else:\n"
-                                    "Line 1: A hex color code (e.g. #FF6B35) that will be maximally visible "
-                                    "as caption text overlaid on this image. Pick a color that contrasts strongly "
-                                    "with the dominant colors in the lower portion of the image where the caption appears.\n"
+                                    "Line 1: Either #000000 or #FFFFFF — pick whichever contrasts better "
+                                    "with the lower portion of the image where the caption appears.\n"
                                     "Line 2: A single short, atmospheric sentence (max 15 words) describing what you see. "
                                     "Be poetic and immersive. No quotes, no labels, just the narration."
                                 ),
@@ -844,9 +843,9 @@ class InferenceEngine:
 
             # Parse color and text from response
             lines = result.strip().split('\n', 1)
-            color = "#e0e0e0"  # default fallback
+            color = "#FFFFFF"  # default fallback
             caption_text = result
-            if len(lines) == 2 and lines[0].startswith('#') and len(lines[0]) == 7:
+            if len(lines) == 2 and lines[0].strip() in ("#000000", "#FFFFFF"):
                 color = lines[0].strip()
                 caption_text = lines[1].strip()
             logger.info("[Caption %s] Block %d parsed: color=%s text=%s", client_label, block_num, color, caption_text)
