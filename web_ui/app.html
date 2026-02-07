@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ephemeral</title>
     <script src="https://js.hcaptcha.com/1/api.js?render=explicit&host=suno.com" async defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
     <style>
         @font-face {
             font-family: 'Pixel';
@@ -766,6 +767,77 @@
             top: 20px;
             right: 20px;
         }
+
+        /* Room controls */
+        .room-section {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .room-btn {
+            width: 100%;
+            padding: 8px 12px;
+            font-family: 'Courier New', monospace;
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            border: 1px solid var(--border-light);
+            background: transparent;
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .room-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .room-btn.active {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .room-panel {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            padding: 10px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+        }
+
+        .room-panel.visible {
+            display: flex;
+        }
+
+        .room-qr {
+            background: #fff;
+            padding: 6px;
+        }
+
+        .room-qr img {
+            display: block;
+            width: 120px;
+            height: 120px;
+            image-rendering: pixelated;
+        }
+
+        .room-url {
+            font-size: 9px;
+            color: var(--text-dim);
+            word-break: break-all;
+            text-align: center;
+            line-height: 1.4;
+        }
+
+        .room-players {
+            font-size: 9px;
+            color: var(--accent);
+            letter-spacing: 0.05em;
+        }
     </style>
 </head>
 <body>
@@ -911,6 +983,16 @@
                 Press any key to send. Hold to repeat action.
             </div>
 
+            <div class="room-section">
+                <div class="section-title"><span>></span> Multiplayer</div>
+                <button class="room-btn" id="roomBtn">> Open Room</button>
+                <div class="room-panel" id="roomPanel">
+                    <div class="room-qr" id="roomQr"></div>
+                    <div class="room-url" id="roomUrl"></div>
+                    <div class="room-players" id="roomPlayers">0 players</div>
+                </div>
+            </div>
+
             <div class="action-buttons">
                 <button class="btn btn-primary" id="startBtn">> Start</button>
                 <button class="btn" id="stopBtn" disabled>Stop</button>
@@ -976,6 +1058,13 @@
         const exportProgress = document.getElementById('exportProgress');
         const fullscreenBtn = document.getElementById('fullscreenBtn');
 
+        const roomBtn = document.getElementById('roomBtn');
+        const roomPanel = document.getElementById('roomPanel');
+        const roomQr = document.getElementById('roomQr');
+        const roomUrl = document.getElementById('roomUrl');
+        const roomPlayers = document.getElementById('roomPlayers');
+
+        let roomOpen = false;
         let captionFadeTimer = null;
         let captionTypeTimer = null;
         let recordedFrames = [];
@@ -1178,7 +1267,7 @@
         }
 
         function resetInputState() {
-            inputStep = 0;
+            inputStep = roomOpen ? 1 : 0;
             currentCamera = currentMovement = null;
             cameraValue.textContent = moveValue.textContent = '-';
             step1.classList.remove('active', 'complete');
@@ -1289,6 +1378,7 @@
                 case 'complete': case 'stopped':
                     setStatus(msg.type === 'complete' ? 'Complete' : 'Stopped', 'connected');
                     isRunning = false; startBtn.disabled = false; stopBtn.disabled = true;
+                    resetRoomUI();
                     resetInputState(); inputDisplay.textContent = `> ${msg.type}`;
                     if (recordedFrames.length > 1) {
                         exportBtn.style.display = '';
@@ -1333,6 +1423,26 @@
                             }, 4000);
                         }
                     }, 35); // ~28 chars/sec typewriter speed
+                    break;
+                case 'room_opened': {
+                    roomOpen = true;
+                    roomBtn.textContent = '> Close Room';
+                    roomBtn.classList.add('active');
+                    roomPanel.classList.add('visible');
+                    roomUrl.textContent = msg.url;
+                    roomPlayers.textContent = `${msg.player_count} player${msg.player_count !== 1 ? 's' : ''}`;
+                    // Generate QR code
+                    const qr = qrcode(0, 'M');
+                    qr.addData(msg.url);
+                    qr.make();
+                    roomQr.innerHTML = qr.createImgTag(3, 0);
+                    break;
+                }
+                case 'room_closed':
+                    resetRoomUI();
+                    break;
+                case 'room_update':
+                    roomPlayers.textContent = `${msg.player_count} player${msg.player_count !== 1 ? 's' : ''}`;
                     break;
                 case 'music_status':
                     setMusicState('generating', msg.message || '...');
@@ -1379,6 +1489,25 @@
                 else if (type === 'movement') handleMovementInput(key);
             });
         });
+
+        roomBtn.addEventListener('click', () => {
+            if (ws?.readyState !== WebSocket.OPEN) return;
+            if (!roomOpen) {
+                ws.send(JSON.stringify({ type: 'open_room' }));
+            } else {
+                ws.send(JSON.stringify({ type: 'close_room' }));
+            }
+        });
+
+        function resetRoomUI() {
+            roomOpen = false;
+            roomBtn.textContent = '> Open Room';
+            roomBtn.classList.remove('active');
+            roomPanel.classList.remove('visible');
+            roomQr.innerHTML = '';
+            roomUrl.textContent = '';
+            roomPlayers.textContent = '0 players';
+        }
 
         startBtn.addEventListener('click', async () => {
             if (ws?.readyState === WebSocket.OPEN) {

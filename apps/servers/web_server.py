@@ -18,7 +18,12 @@ import argparse
 import base64
 import copy
 import logging
+import random
+import socket
+import string
 import time
+from collections import Counter
+from dataclasses import dataclass, field
 from queue import Queue, Empty
 from typing import Optional
 
@@ -60,6 +65,49 @@ logger = logging.getLogger("ephemeral.web")
 # Global state
 inference_engine: Optional["InferenceEngine"] = None
 suno_client: Optional[SunoClient] = None
+
+
+@dataclass
+class RoomState:
+    room_id: str
+    host_ws: WebSocket
+    player_websockets: set = field(default_factory=set)
+    votes: list = field(default_factory=list)
+    vote_event: asyncio.Event = field(default_factory=asyncio.Event)
+    is_active: bool = True
+
+
+room_state: Optional[RoomState] = None
+server_port: int = 8080
+
+
+def _get_lan_ip() -> str:
+    """Get the LAN IP address of this machine."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+def _generate_room_id(length: int = 4) -> str:
+    """Generate a short uppercase+digits room code."""
+    return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
+
+def _resolve_votes(votes: list) -> dict:
+    """Pick the majority vote from a list of {keyboard, mouse} dicts. Random tiebreak."""
+    if not votes:
+        return {"keyboard": "q", "mouse": "u"}
+    pairs = [(v.get("keyboard", "q"), v.get("mouse", "u")) for v in votes]
+    counts = Counter(pairs)
+    max_count = max(counts.values())
+    winners = [pair for pair, count in counts.items() if count == max_count]
+    winner = random.choice(winners)
+    return {"keyboard": winner[0], "mouse": winner[1]}
 
 
 def _websocket_client_label(websocket: WebSocket) -> str:
@@ -676,6 +724,43 @@ class InferenceEngine:
             caption_elapsed = time.perf_counter() - caption_start
             logger.warning("[Caption %s] Block %d failed after %.2fs: %s", client_label, block_num, caption_elapsed, e)
 
+    async def _get_next_action(self) -> Optional[dict]:
+        """Get next action: from vote buffer (room mode) or action_queue (solo mode)."""
+        global room_state
+        if room_state is None or not room_state.is_active:
+            return await asyncio.wait_for(self.action_queue.get(), timeout=120.0)
+
+        # Room mode: if votes are buffered, resolve immediately
+        rs = room_state
+        if rs.votes:
+            result = _resolve_votes(rs.votes)
+            vote_count = len(rs.votes)
+            rs.votes.clear()
+            rs.vote_event.clear()
+            logger.info("[Room] Resolved %d votes -> keyboard=%s mouse=%s", vote_count, result["keyboard"], result["mouse"])
+            return result
+
+        # No votes yet — wait for first vote or room closure
+        rs.vote_event.clear()
+        try:
+            await asyncio.wait_for(rs.vote_event.wait(), timeout=120.0)
+        except asyncio.TimeoutError:
+            return {"keyboard": "q", "mouse": "u"}
+
+        # Room may have closed while waiting
+        if room_state is None or not room_state.is_active:
+            return await asyncio.wait_for(self.action_queue.get(), timeout=120.0)
+
+        if rs.votes:
+            result = _resolve_votes(rs.votes)
+            vote_count = len(rs.votes)
+            rs.votes.clear()
+            rs.vote_event.clear()
+            logger.info("[Room] Resolved %d votes (after wait) -> keyboard=%s mouse=%s", vote_count, result["keyboard"], result["mouse"])
+            return result
+
+        return {"keyboard": "q", "mouse": "u"}
+
     def _parse_action(self, action_data: dict) -> dict:
         """Parse action from WebSocket message to tensor format."""
         mode = self.mode
@@ -958,10 +1043,7 @@ class InferenceEngine:
             # Wait for action with timeout
             try:
                 action_wait_started_at = time.perf_counter()
-                action = await asyncio.wait_for(
-                    self.action_queue.get(),
-                    timeout=120.0
-                )
+                action = await self._get_next_action()
                 if action is None:
                     logger.info("[UI %s] Block %d received stop sentinel", client_label, block_num)
                     break
@@ -1115,6 +1197,48 @@ class InferenceEngine:
         self.should_stop = True
 
 
+async def _broadcast_player_count():
+    """Send updated player count to host and all players."""
+    global room_state
+    rs = room_state
+    if rs is None:
+        return
+    count = len(rs.player_websockets)
+    msg = {"type": "room_update", "player_count": count}
+    try:
+        await rs.host_ws.send_json(msg)
+    except Exception:
+        pass
+    for pw in list(rs.player_websockets):
+        try:
+            await pw.send_json(msg)
+        except Exception:
+            pass
+
+
+async def _close_room():
+    """Close the active room: notify all players and host, reset state."""
+    global room_state
+    rs = room_state
+    if rs is None:
+        return
+    rs.is_active = False
+    rs.vote_event.set()  # wake any waiting _get_next_action
+    close_msg = {"type": "room_closed"}
+    for pw in list(rs.player_websockets):
+        try:
+            await pw.send_json(close_msg)
+            await pw.close()
+        except Exception:
+            pass
+    try:
+        await rs.host_ws.send_json(close_msg)
+    except Exception:
+        pass
+    logger.info("[Room] Room %s closed (%d players were connected)", rs.room_id, len(rs.player_websockets))
+    room_state = None
+
+
 @app.get("/", response_class=HTMLResponse)
 async def get_index():
     """Serve the main HTML page."""
@@ -1156,6 +1280,52 @@ async def list_images():
                     if img.endswith(('.png', '.jpg', '.jpeg')):
                         images.append(f"{demo_dir}/{subdir}/{img}")
     return {"images": images}
+
+
+@app.get("/room/{room_id}", response_class=HTMLResponse)
+async def get_room(room_id: str):
+    """Serve the mobile remote control page if room exists."""
+    global room_state
+    if room_state is None or room_state.room_id != room_id or not room_state.is_active:
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("Room not found", status_code=404)
+    return FileResponse("web_ui/remote.html")
+
+
+@app.websocket("/ws/room/{room_id}")
+async def room_websocket(websocket: WebSocket, room_id: str):
+    """WebSocket endpoint for mobile remote control players."""
+    global room_state
+    await websocket.accept()
+    if room_state is None or room_state.room_id != room_id or not room_state.is_active:
+        await websocket.close(code=4004, reason="Room not found")
+        return
+    rs = room_state
+    rs.player_websockets.add(websocket)
+    count = len(rs.player_websockets)
+    logger.info("[Room] Player joined room %s (player_count=%d)", room_id, count)
+
+    try:
+        await websocket.send_json({"type": "room_joined", "player_count": count})
+        await _broadcast_player_count()
+
+        while True:
+            data = await websocket.receive_json()
+            if data.get("type") == "vote":
+                if rs.is_active:
+                    rs.votes.append({"keyboard": data.get("keyboard", "q"), "mouse": data.get("mouse", "u")})
+                    rs.vote_event.set()
+                    logger.info("[Room] Vote from player: keyboard=%s mouse=%s (buffered=%d)",
+                                data.get("keyboard"), data.get("mouse"), len(rs.votes))
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        rs.player_websockets.discard(websocket)
+        logger.info("[Room] Player left room %s (player_count=%d)", room_id, len(rs.player_websockets))
+        if rs.is_active:
+            await _broadcast_player_count()
 
 
 @app.websocket("/ws")
@@ -1208,19 +1378,52 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif msg_type == "action":
                 if inference_engine and inference_engine.is_running:
-                    await inference_engine.action_queue.put(data)
-                    logger.info(
-                        "[WS %s] Queued action (%s) queue_size=%d",
-                        client_label,
-                        _summarize_action_payload(data),
-                        inference_engine.action_queue.qsize(),
-                    )
+                    if room_state and room_state.is_active:
+                        room_state.votes.append({"keyboard": data.get("keyboard", "q"), "mouse": data.get("mouse", "u")})
+                        room_state.vote_event.set()
+                        logger.info(
+                            "[WS %s] Host vote (%s) buffered=%d",
+                            client_label,
+                            _summarize_action_payload(data),
+                            len(room_state.votes),
+                        )
+                    else:
+                        await inference_engine.action_queue.put(data)
+                        logger.info(
+                            "[WS %s] Queued action (%s) queue_size=%d",
+                            client_label,
+                            _summarize_action_payload(data),
+                            inference_engine.action_queue.qsize(),
+                        )
                 else:
                     logger.warning("[WS %s] Dropped action: inference is not running", client_label)
+
+            elif msg_type == "open_room":
+                if room_state is not None:
+                    await websocket.send_json({"type": "error", "message": "Room already open"})
+                else:
+                    rid = _generate_room_id()
+                    room_state = RoomState(room_id=rid, host_ws=websocket)
+                    lan_ip = _get_lan_ip()
+                    url = f"http://{lan_ip}:{server_port}/room/{rid}"
+                    logger.info("[WS %s] Room opened: %s -> %s", client_label, rid, url)
+                    await websocket.send_json({
+                        "type": "room_opened",
+                        "room_id": rid,
+                        "url": url,
+                        "player_count": 0,
+                    })
+
+            elif msg_type == "close_room":
+                if room_state and room_state.host_ws == websocket:
+                    logger.info("[WS %s] Close room requested", client_label)
+                    await _close_room()
 
             elif msg_type == "stop":
                 if inference_engine:
                     logger.info("[WS %s] Stop requested by client", client_label)
+                    if room_state and room_state.host_ws == websocket:
+                        await _close_room()
                     inference_engine.stop()
                     await inference_engine.action_queue.put(None)
                     await websocket.send_json({"type": "stopped"})
@@ -1229,11 +1432,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
     except WebSocketDisconnect:
         logger.info("[WS %s] Disconnected", client_label)
+        if room_state and room_state.host_ws == websocket:
+            await _close_room()
         if inference_engine:
             inference_engine.stop()
             await inference_engine.action_queue.put(None)
     except Exception as e:
         logger.exception("[WS %s] WebSocket error", client_label)
+        if room_state and room_state.host_ws == websocket:
+            await _close_room()
         if inference_engine:
             inference_engine.stop()
             await inference_engine.action_queue.put(None)
@@ -1271,6 +1478,7 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
+    server_port = args.port
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
