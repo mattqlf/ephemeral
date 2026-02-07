@@ -838,6 +838,59 @@
             color: var(--accent);
             letter-spacing: 0.05em;
         }
+
+        .action-feed {
+            display: none;
+            width: 100%;
+            max-height: 140px;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            scrollbar-width: thin;
+            scrollbar-color: var(--border-light) transparent;
+        }
+
+        .action-feed.visible {
+            display: block;
+        }
+
+        .action-feed::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .action-feed::-webkit-scrollbar-thumb {
+            background: var(--border-light);
+        }
+
+        .feed-entry {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 8px;
+            font-size: 9px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .feed-entry:last-child {
+            border-bottom: none;
+        }
+
+        .feed-name {
+            color: var(--accent);
+            min-width: 50px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .feed-action {
+            color: var(--text-dim);
+        }
+
+        .feed-keys {
+            color: var(--text);
+            font-weight: 500;
+        }
     </style>
 </head>
 <body>
@@ -991,6 +1044,7 @@
                     <div class="room-url" id="roomUrl"></div>
                     <div class="room-players" id="roomPlayers">0 players</div>
                 </div>
+                <div class="action-feed" id="actionFeed"></div>
             </div>
 
             <div class="action-buttons">
@@ -1063,6 +1117,7 @@
         const roomQr = document.getElementById('roomQr');
         const roomUrl = document.getElementById('roomUrl');
         const roomPlayers = document.getElementById('roomPlayers');
+        const actionFeed = document.getElementById('actionFeed');
 
         let roomOpen = false;
         let captionFadeTimer = null;
@@ -1444,6 +1499,9 @@
                 case 'room_update':
                     roomPlayers.textContent = `${msg.player_count} player${msg.player_count !== 1 ? 's' : ''}`;
                     break;
+                case 'action_feed':
+                    appendFeedEntry(msg.name, msg.keyboard, msg.mouse);
+                    break;
                 case 'music_status':
                     setMusicState('generating', msg.message || '...');
                     break;
@@ -1499,6 +1557,30 @@
             }
         });
 
+        const KEY_LABELS = {
+            w: 'W fwd', s: 'S back', a: 'A left', d: 'D right', q: '-',
+            i: 'I up', k: 'K down', j: 'J left', l: 'L right', u: '-',
+        };
+
+        function appendFeedEntry(name, keyboard, mouse) {
+            actionFeed.classList.add('visible');
+            const entry = document.createElement('div');
+            entry.className = 'feed-entry';
+            const kb = KEY_LABELS[keyboard] || keyboard.toUpperCase();
+            const ms = KEY_LABELS[mouse] || mouse.toUpperCase();
+            // Show the meaningful key (skip the neutral '-')
+            let keyStr;
+            if (kb !== '-' && ms !== '-') keyStr = `${kb} + ${ms}`;
+            else if (kb !== '-') keyStr = kb;
+            else if (ms !== '-') keyStr = ms;
+            else keyStr = 'idle';
+            entry.innerHTML = `<span class="feed-name">${name}</span><span class="feed-action">&rarr;</span><span class="feed-keys">${keyStr}</span>`;
+            actionFeed.appendChild(entry);
+            // Keep max 50 entries
+            while (actionFeed.children.length > 50) actionFeed.removeChild(actionFeed.firstChild);
+            actionFeed.scrollTop = actionFeed.scrollHeight;
+        }
+
         function resetRoomUI() {
             roomOpen = false;
             roomBtn.textContent = '> Open Room';
@@ -1507,6 +1589,8 @@
             roomQr.innerHTML = '';
             roomUrl.textContent = '';
             roomPlayers.textContent = '0 players';
+            actionFeed.innerHTML = '';
+            actionFeed.classList.remove('visible');
         }
 
         startBtn.addEventListener('click', async () => {

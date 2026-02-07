@@ -72,6 +72,7 @@ class RoomState:
     room_id: str
     host_ws: WebSocket
     player_websockets: set = field(default_factory=set)
+    player_names: dict = field(default_factory=dict)  # websocket -> name
     votes: list = field(default_factory=list)
     vote_event: asyncio.Event = field(default_factory=asyncio.Event)
     is_active: bool = True
@@ -1204,7 +1205,8 @@ async def _broadcast_player_count():
     if rs is None:
         return
     count = len(rs.player_websockets)
-    msg = {"type": "room_update", "player_count": count}
+    names = list(rs.player_names.values())
+    msg = {"type": "room_update", "player_count": count, "names": names}
     try:
         await rs.host_ws.send_json(msg)
     except Exception:
@@ -1214,6 +1216,23 @@ async def _broadcast_player_count():
             await pw.send_json(msg)
         except Exception:
             pass
+
+
+async def _send_action_feed(name: str, keyboard: str, mouse: str):
+    """Send an action feed entry to the host."""
+    global room_state
+    rs = room_state
+    if rs is None:
+        return
+    try:
+        await rs.host_ws.send_json({
+            "type": "action_feed",
+            "name": name,
+            "keyboard": keyboard,
+            "mouse": mouse,
+        })
+    except Exception:
+        pass
 
 
 async def _close_room():
@@ -1302,10 +1321,18 @@ async def room_websocket(websocket: WebSocket, room_id: str):
         return
     rs = room_state
     rs.player_websockets.add(websocket)
-    count = len(rs.player_websockets)
-    logger.info("[Room] Player joined room %s (player_count=%d)", room_id, count)
+    player_name = "Player"
 
     try:
+        # Wait for first message which should be a join with name
+        first = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
+        if first.get("type") == "join":
+            player_name = (first.get("name") or "Player")[:16]
+
+        rs.player_names[websocket] = player_name
+        count = len(rs.player_websockets)
+        logger.info("[Room] %s joined room %s (player_count=%d)", player_name, room_id, count)
+
         await websocket.send_json({"type": "room_joined", "player_count": count})
         await _broadcast_player_count()
 
@@ -1313,17 +1340,21 @@ async def room_websocket(websocket: WebSocket, room_id: str):
             data = await websocket.receive_json()
             if data.get("type") == "vote":
                 if rs.is_active:
-                    rs.votes.append({"keyboard": data.get("keyboard", "q"), "mouse": data.get("mouse", "u")})
+                    kb = data.get("keyboard", "q")
+                    ms = data.get("mouse", "u")
+                    rs.votes.append({"keyboard": kb, "mouse": ms})
                     rs.vote_event.set()
-                    logger.info("[Room] Vote from player: keyboard=%s mouse=%s (buffered=%d)",
-                                data.get("keyboard"), data.get("mouse"), len(rs.votes))
+                    await _send_action_feed(player_name, kb, ms)
+                    logger.info("[Room] Vote from %s: keyboard=%s mouse=%s (buffered=%d)",
+                                player_name, kb, ms, len(rs.votes))
     except WebSocketDisconnect:
         pass
     except Exception:
         pass
     finally:
         rs.player_websockets.discard(websocket)
-        logger.info("[Room] Player left room %s (player_count=%d)", room_id, len(rs.player_websockets))
+        rs.player_names.pop(websocket, None)
+        logger.info("[Room] %s left room %s (player_count=%d)", player_name, room_id, len(rs.player_websockets))
         if rs.is_active:
             await _broadcast_player_count()
 
@@ -1379,8 +1410,11 @@ async def websocket_endpoint(websocket: WebSocket):
             elif msg_type == "action":
                 if inference_engine and inference_engine.is_running:
                     if room_state and room_state.is_active:
-                        room_state.votes.append({"keyboard": data.get("keyboard", "q"), "mouse": data.get("mouse", "u")})
+                        kb = data.get("keyboard", "q")
+                        ms = data.get("mouse", "u")
+                        room_state.votes.append({"keyboard": kb, "mouse": ms})
                         room_state.vote_event.set()
+                        await _send_action_feed("Host", kb, ms)
                         logger.info(
                             "[WS %s] Host vote (%s) buffered=%d",
                             client_label,

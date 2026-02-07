@@ -141,6 +141,62 @@
             letter-spacing: 0.05em;
         }
 
+        /* Name entry overlay */
+        .name-overlay {
+            position: fixed;
+            inset: 0;
+            background: var(--bg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 16px;
+            z-index: 100;
+        }
+
+        .name-overlay.hidden {
+            display: none;
+        }
+
+        .name-title {
+            font-size: 11px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .name-input {
+            width: 200px;
+            padding: 10px 14px;
+            background: var(--bg);
+            border: 1px solid var(--border-light);
+            color: var(--text);
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            text-align: center;
+            outline: none;
+        }
+
+        .name-input:focus {
+            border-color: var(--accent);
+        }
+
+        .name-input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .name-go-btn {
+            padding: 10px 24px;
+            font-family: 'Courier New', monospace;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            border: 1px solid var(--accent);
+            background: var(--accent);
+            color: var(--bg);
+            cursor: pointer;
+        }
+
         .closed-overlay {
             display: none;
             position: fixed;
@@ -171,6 +227,12 @@
     </style>
 </head>
 <body>
+    <div class="name-overlay" id="nameOverlay">
+        <div class="name-title">Enter your name</div>
+        <input type="text" class="name-input" id="nameInput" placeholder="Player" maxlength="16" autocomplete="off" />
+        <button class="name-go-btn" id="nameGoBtn">> Join</button>
+    </div>
+
     <header>
         <span class="logo">Ephemeral Remote</span>
         <div class="status">
@@ -222,12 +284,28 @@
         const statusText = document.getElementById('statusText');
         const playerCount = document.getElementById('playerCount');
         const closedOverlay = document.getElementById('closedOverlay');
+        const nameOverlay = document.getElementById('nameOverlay');
+        const nameInput = document.getElementById('nameInput');
+        const nameGoBtn = document.getElementById('nameGoBtn');
 
         // Extract room_id from URL path: /room/{room_id}
         const pathParts = location.pathname.split('/');
         const roomId = pathParts[pathParts.length - 1];
 
         let ws = null;
+        let playerName = '';
+
+        // ── Name entry ──
+        nameInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') submitName();
+        });
+        nameGoBtn.addEventListener('click', submitName);
+
+        function submitName() {
+            playerName = nameInput.value.trim() || 'Player';
+            nameOverlay.classList.add('hidden');
+            connect();
+        }
 
         function setStatus(text, state) {
             statusText.textContent = text;
@@ -238,7 +316,11 @@
             const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws = new WebSocket(`${protocol}//${location.host}/ws/room/${roomId}`);
 
-            ws.onopen = () => setStatus('Connected', 'connected');
+            ws.onopen = () => {
+                setStatus('Connected', 'connected');
+                // Send join with name
+                ws.send(JSON.stringify({ type: 'join', name: playerName }));
+            };
 
             ws.onclose = (e) => {
                 if (e.code === 4004) {
@@ -271,7 +353,7 @@
 
         function sendVote(keyboard, mouse) {
             if (ws?.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'vote', keyboard, mouse }));
+                ws.send(JSON.stringify({ type: 'vote', keyboard, mouse, name: playerName }));
             }
         }
 
@@ -291,7 +373,8 @@
             el.addEventListener('click', handleTap);
         });
 
-        connect();
+        // Focus name input on load
+        nameInput.focus();
     </script>
 </body>
 </html>
