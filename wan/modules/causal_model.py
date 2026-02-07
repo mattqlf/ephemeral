@@ -99,7 +99,7 @@ class CausalWanSelfAttention(nn.Module):
         self.sink_size = sink_size
         self.qk_norm = qk_norm
         self.eps = eps
-        self.max_attention_size = 15 * 1 * 880 if local_attn_size == -1 else local_attn_size * 880
+        self._max_attn_frames = 15 if local_attn_size == -1 else local_attn_size
         # layers
         self.q = nn.Linear(dim, dim)
         self.k = nn.Linear(dim, dim)
@@ -208,10 +208,11 @@ class CausalWanSelfAttention(nn.Module):
                 
                 kv_cache["k"][:, local_start_index:local_end_index] = roped_key
                 kv_cache["v"][:, local_start_index:local_end_index] = v
+            max_attention_size = self._max_attn_frames * frame_seqlen
             x = attention(
                 roped_query,
-                kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index],
-                kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
+                kv_cache["k"][:, max(0, local_end_index - max_attention_size):local_end_index],
+                kv_cache["v"][:, max(0, local_end_index - max_attention_size):local_end_index]
             )
             kv_cache["global_end_index"].fill_(current_end)
             kv_cache["local_end_index"].fill_(local_end_index)
