@@ -13,6 +13,12 @@ print("[startup] Loading modules...", flush=True)
 
 os.environ["GOOGLE_API_KEY"] = "AIzaSyBsBvyfplPcR3g503sehLCbkU5nLkSY05A"
 
+# Persist Triton/inductor kernel caches so subsequent launches skip recompilation.
+# On RunPod, ~/.triton/ is ephemeral — /workspace/ survives restarts.
+if os.path.isdir("/workspace") and "TRITON_CACHE_DIR" not in os.environ:
+    os.environ["TRITON_CACHE_DIR"] = "/workspace/.cache/triton"
+os.environ.setdefault("TORCHINDUCTOR_FX_GRAPH_CACHE", "1")
+
 # Must be set before model imports — flex_attention compile checks this at import time
 if "--true-no-compile" in sys.argv:
     os.environ["MATRIX_NO_COMPILE"] = "1"
@@ -32,45 +38,50 @@ from dataclasses import dataclass, field
 from queue import Queue, Empty
 from typing import Optional
 
-_t1 = _time.perf_counter()
-print(f"[startup] Importing torch... ({_t1 - _t0:.1f}s so far)", flush=True)
+def _elapsed():
+    return f"{_time.perf_counter() - _t0:.1f}s"
+
+print(f"[startup] Importing torch...", flush=True)
 import torch
 import torch._dynamo
+print(f"[startup] torch imported ({_elapsed()})", flush=True)
 
 # Increase dynamo cache size to prevent VAE cache thrashing
 torch._dynamo.config.cache_size_limit = 64
 import numpy as np
 
-_t2 = _time.perf_counter()
-print(f"[startup] Importing model pipeline... ({_t2 - _t0:.1f}s so far)", flush=True)
+print(f"[startup] Importing dependencies...", flush=True)
 from demo_utils.constant import ZERO_VAE_CACHE
 from PIL import Image
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse
 import uvicorn
-
 from omegaconf import OmegaConf
 from torchvision.transforms import v2
 from diffusers.utils import load_image
 from safetensors.torch import load_file
 from einops import rearrange
+print(f"[startup] Dependencies imported ({_elapsed()})", flush=True)
 
+print(f"[startup] Importing model pipeline (flex_attention compile happens here)...", flush=True)
 from pipeline import CausalInferenceStreamingPipeline
 from pipeline.causal_inference import cond_current
+print(f"[startup] Pipeline imported ({_elapsed()})", flush=True)
+
+print(f"[startup] Importing VAE and utilities...", flush=True)
 from wan.vae.wanx_vae import get_wanx_vae_wrapper
 from demo_utils.vae_block3 import VAEDecoderWrapper
 from utils.misc import set_seed
 from utils.conditions import Bench_actions_universal, Bench_actions_gta_drive, Bench_actions_templerun
 from utils.wan_wrapper import WanDiffusionWrapper
+print(f"[startup] VAE and utilities imported ({_elapsed()})", flush=True)
 
 from google import genai
 from google.genai import types as genai_types
-
 import anthropic
 from suno_api.client import SunoClient
 
-_t3 = _time.perf_counter()
-print(f"[startup] All modules loaded ({_t3 - _t0:.1f}s)", flush=True)
+print(f"[startup] All modules loaded ({_elapsed()})", flush=True)
 
 app = FastAPI(title="Matrix-Game 2.0 Web UI")
 logger = logging.getLogger("ephemeral.web")
