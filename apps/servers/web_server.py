@@ -446,14 +446,19 @@ class InferenceEngine:
             })
 
             # Step 1: Call Anthropic to create a Suno music prompt
-            img_b64 = None
-            if image:
-                img_buffer = io.BytesIO()
-                image.save(img_buffer, format="JPEG", quality=80)
-                img_b64 = base64.b64encode(img_buffer.getvalue()).decode()
+            # Entire function runs in thread executor so it doesn't depend on event loop
+            # (event loop gets blocked by synchronous GPU ops like VAE encoding)
+            _image = image  # capture for closure
 
-            def _call_anthropic():
+            def _encode_and_call_anthropic():
                 from suno_api.client import DEFAULT_ANTHROPIC_KEY
+
+                img_b64 = None
+                if _image:
+                    img_buffer = io.BytesIO()
+                    _image.save(img_buffer, format="JPEG", quality=80)
+                    img_b64 = base64.b64encode(img_buffer.getvalue()).decode()
+
                 client = anthropic.Anthropic(
                     api_key=os.environ.get("ANTHROPIC_API_KEY", DEFAULT_ANTHROPIC_KEY)
                 )
@@ -477,12 +482,12 @@ class InferenceEngine:
                     "Output ONLY the Suno prompt, nothing else."
                 )
 
-                if image and prompt:
+                if _image and prompt:
                     text_part = (
                         "You are creating a prompt for Suno AI to generate background music for a video game world. "
                         f"Look at this game scene image (the player described it as: \"{prompt}\"). " + suffix
                     )
-                elif image:
+                elif _image:
                     text_part = (
                         "You are creating a prompt for Suno AI to generate background music for a video game world. "
                         "Look at this game scene image. " + suffix
@@ -504,7 +509,7 @@ class InferenceEngine:
 
             logger.info("[Music %s] Calling Anthropic for music prompt...", client_label)
             loop = asyncio.get_event_loop()
-            music_prompt = await loop.run_in_executor(None, _call_anthropic)
+            music_prompt = await loop.run_in_executor(None, _encode_and_call_anthropic)
             anthropic_elapsed = time.perf_counter() - music_start
             logger.info("[Music %s] Anthropic responded in %.2fs: %s", client_label, anthropic_elapsed, music_prompt)
 
@@ -539,31 +544,44 @@ class InferenceEngine:
                 "message": "Waiting for music generation..."
             })
 
-            # Step 3: Poll until songs are complete
-            logger.info("[Music %s] Polling for song completion (timeout=300s)...", client_label)
+            # Step 3: Poll until first song is complete (Suno generates 2, play whichever finishes first)
+            logger.info("[Music %s] Polling for first song completion (timeout=300s)...", client_label)
             poll_start = time.perf_counter()
-            songs = await suno_client.wait_for_songs(clip_ids, timeout=300)
-            poll_elapsed = time.perf_counter() - poll_start
-            audio_urls = [s.get("audio_url") for s in songs if s.get("audio_url")]
+            deadline = time.perf_counter() + 300
+            poll_count = 0
+            first_ready = None
+            while time.perf_counter() < deadline:
+                songs = await suno_client.get_songs(clip_ids)
+                poll_count += 1
+                for s in songs:
+                    if s.get("audio_url"):
+                        first_ready = s
+                        break
+                if first_ready:
+                    break
+                statuses = [s.get("status", "?") for s in songs]
+                logger.info("[Music %s] Poll #%d: statuses=%s", client_label, poll_count, statuses)
+                await asyncio.sleep(5)
 
-            if audio_urls:
+            poll_elapsed = time.perf_counter() - poll_start
+            if first_ready:
                 total_elapsed = time.perf_counter() - music_start
                 logger.info(
-                    "[Music %s] Music ready in %.2fs (poll=%.2fs): urls=%s",
-                    client_label, total_elapsed, poll_elapsed, audio_urls,
+                    "[Music %s] First song ready in %.2fs (poll=%.2fs, %d polls): %s",
+                    client_label, total_elapsed, poll_elapsed, poll_count, first_ready.get("audio_url"),
                 )
                 await websocket.send_json({
                     "type": "music_ready",
-                    "audio_urls": audio_urls,
-                    "title": songs[0].get("title", ""),
+                    "audio_urls": [first_ready["audio_url"]],
+                    "title": first_ready.get("title", ""),
                     "prompt": music_prompt,
                 })
             else:
                 total_elapsed = time.perf_counter() - music_start
                 song_statuses = [s.get("status", "?") for s in songs]
                 logger.warning(
-                    "[Music %s] Suno returned no audio URLs after %.2fs (statuses=%s)",
-                    client_label, total_elapsed, song_statuses,
+                    "[Music %s] No songs ready after %.2fs (%d polls, statuses=%s)",
+                    client_label, total_elapsed, poll_count, song_statuses,
                 )
 
         except Exception as e:
@@ -702,7 +720,18 @@ class InferenceEngine:
             result["mouse"] = mouse_cond
         return result
 
-    async def run_inference(self, img_input: str | None, websocket: WebSocket, prompt: str = None, captcha_token: str = ""):
+    async def start_music(self, captcha_token: str, websocket: WebSocket):
+        """Start music generation with the captcha token (called when token arrives via WS)."""
+        client_label = _websocket_client_label(websocket)
+        if not captcha_token:
+            logger.warning("[Music %s] Empty captcha token, skipping music", client_label)
+            return
+        prompt = getattr(self, '_music_prompt', '')
+        image = getattr(self, '_music_image', None)
+        logger.info("[Music %s] Captcha token received (%d chars), starting music generation", client_label, len(captcha_token))
+        asyncio.create_task(self._generate_music(prompt, image, websocket, captcha_token))
+
+    async def run_inference(self, img_input: str | None, websocket: WebSocket, prompt: str = None):
         """Run inference loop with WebSocket streaming."""
         client_label = _websocket_client_label(websocket)
         run_started_at = time.perf_counter()
@@ -745,13 +774,14 @@ class InferenceEngine:
                     logger.info("[UI %s] Loading image from path=%s", client_label, img_input)
                     image = load_image(img_input)
 
+            # Store for music generation immediately (captcha token may arrive any time)
+            # Music gen runs in parallel with Gemini — doesn't need the Gemini-generated image
+            self._music_prompt = prompt or ""
+            self._music_image = image  # uploaded image or None; good enough for Anthropic music prompt
+
             # Generate image with Gemini if prompt provided
             if prompt:
                 image = await self._generate_image_with_gemini(prompt, image, websocket)
-
-            # Kick off background music generation (non-blocking)
-            if captcha_token:
-                asyncio.create_task(self._generate_music(prompt or "", image, websocket, captcha_token))
 
             image = self._resizecrop(image, 352, 640)
             logger.info("[UI %s] Input image normalized to %s", client_label, image.size)
@@ -1144,18 +1174,16 @@ async def websocket_endpoint(websocket: WebSocket):
             if msg_type == "start":
                 img_input = data.get("image", None)
                 prompt = data.get("prompt", None)
-                captcha_token = data.get("captcha_token", "")
                 logger.info(
-                    "[WS %s] Start requested image_source=%s prompt=%s captcha=%s",
+                    "[WS %s] Start requested image_source=%s prompt=%s",
                     client_label,
                     "upload" if (img_input and str(img_input).startswith("data:image")) else ("path" if img_input else "none"),
                     "yes" if prompt else "no",
-                    "yes" if captcha_token else "no",
                 )
                 if inference_engine and not inference_engine.is_running:
                     try:
                         asyncio.create_task(
-                            inference_engine.run_inference(img_input, websocket, prompt=prompt, captcha_token=captcha_token))
+                            inference_engine.run_inference(img_input, websocket, prompt=prompt))
                         logger.info("[WS %s] Inference task created", client_label)
                     except Exception as e:
                         logger.exception("[WS %s] Failed to start inference task", client_label)
@@ -1169,6 +1197,14 @@ async def websocket_endpoint(websocket: WebSocket):
                         "type": "error",
                         "message": "Engine not ready or already running"
                     })
+
+            elif msg_type == "captcha_token":
+                token = data.get("token", "")
+                logger.info("[WS %s] Captcha token received (%d chars)", client_label, len(token))
+                if inference_engine and inference_engine.is_running:
+                    await inference_engine.start_music(token, websocket)
+                else:
+                    logger.warning("[WS %s] Captcha token received but inference not running", client_label)
 
             elif msg_type == "action":
                 if inference_engine and inference_engine.is_running:

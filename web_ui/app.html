@@ -172,7 +172,7 @@
         .caption-text {
             display: inline-block;
             font-family: 'Courier New', monospace;
-            font-size: 13px;
+            font-size: 16px;
             color: #e0e0e0;
             text-shadow: 0 0 8px rgba(0, 212, 170, 0.4), 0 1px 3px rgba(0,0,0,0.9);
             letter-spacing: 0.04em;
@@ -193,7 +193,7 @@
         .caption-cursor {
             display: inline-block;
             width: 2px;
-            height: 13px;
+            height: 16px;
             background: var(--accent);
             margin-left: 2px;
             vertical-align: middle;
@@ -758,7 +758,7 @@
         }
 
         .video-container:fullscreen .caption-text {
-            font-size: 16px;
+            font-size: 22px;
             line-height: 1.6;
         }
 
@@ -1416,21 +1416,22 @@
                     setStatus('Starting...', 'waiting');
                 }
 
-                // Get hCaptcha token for Suno music generation (all input combos: image-only, text-only, or both)
+                // Send start message immediately — video generation begins right away
+                ws.send(JSON.stringify(msg));
+
+                // Solve hCaptcha in background and send token separately for music generation
                 setMusicState('generating', 'solving captcha...');
-                try {
-                    const captchaToken = await getCaptchaToken();
-                    if (captchaToken) {
-                        msg.captcha_token = captchaToken;
-                        setMusicState('generating', 'captcha solved, waiting for server...');
-                    } else {
+                getCaptchaToken().then(captchaToken => {
+                    if (captchaToken && ws?.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'captcha_token', token: captchaToken }));
+                        setMusicState('generating', 'captcha solved, composing music...');
+                    } else if (!captchaToken) {
                         setMusicState('error', 'captcha failed — no music this session');
                     }
-                } catch (e) {
+                }).catch(e => {
                     console.warn('hCaptcha failed:', e);
                     setMusicState('error', 'captcha unavailable — no music this session');
-                }
-                ws.send(JSON.stringify(msg));
+                });
             }
         });
 
