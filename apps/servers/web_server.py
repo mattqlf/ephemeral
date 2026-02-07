@@ -847,56 +847,31 @@ class InferenceEngine:
             logger.warning("[Caption %s] Block %d failed after %.2fs: %s", client_label, block_num, caption_elapsed, e)
 
     async def _get_next_action(self, world_id: int = 0) -> Optional[dict]:
-        """Get next action: from vote buffer (room mode) or action_queue (solo mode).
+        """Get next action for a world.
 
-        world_id=0 (host world): blocking wait for action.
-        world_id>0: non-blocking — resolve buffered votes or return random action immediately.
+        world_id=0 (host world): always reads from action_queue (blocking).
+            Host actions are routed to action_queue regardless of room state,
+            avoiding race conditions when a room opens/closes mid-inference.
+        world_id>0: non-blocking — resolve buffered room votes or return random.
         """
         global room_state
-        if room_state is None or not room_state.is_active:
-            if world_id == 0:
-                return await asyncio.wait_for(self.action_queue.get(), timeout=120.0)
-            else:
-                return self._random_action()
 
-        # Room mode
-        rs = room_state
-        world_votes = rs.votes.get(world_id, [])
-
-        if world_votes:
-            result = _resolve_votes(world_votes)
-            vote_count = len(world_votes)
-            rs.votes[world_id] = []
-            if world_id == 0:
-                rs.vote_event.clear()
-            logger.info("[Room] World %d resolved %d votes -> keyboard=%s mouse=%s", world_id, vote_count, result["keyboard"], result["mouse"])
-            return result
-
-        # Non-host worlds: don't block, return random action
-        if world_id > 0:
-            return self._random_action()
-
-        # Host world (0): wait for first vote or room closure
-        rs.vote_event.clear()
-        try:
-            await asyncio.wait_for(rs.vote_event.wait(), timeout=120.0)
-        except asyncio.TimeoutError:
-            return {"keyboard": "q", "mouse": "u"}
-
-        # Room may have closed while waiting
-        if room_state is None or not room_state.is_active:
+        # World 0 (host): always consume from action_queue
+        if world_id == 0:
             return await asyncio.wait_for(self.action_queue.get(), timeout=120.0)
 
-        world_votes = rs.votes.get(0, [])
-        if world_votes:
-            result = _resolve_votes(world_votes)
-            vote_count = len(world_votes)
-            rs.votes[0] = []
-            rs.vote_event.clear()
-            logger.info("[Room] World 0 resolved %d votes (after wait) -> keyboard=%s mouse=%s", vote_count, result["keyboard"], result["mouse"])
-            return result
+        # Other worlds: check room votes, fall back to random
+        rs = room_state
+        if rs and rs.is_active:
+            world_votes = rs.votes.get(world_id, [])
+            if world_votes:
+                result = _resolve_votes(world_votes)
+                vote_count = len(world_votes)
+                rs.votes[world_id] = []
+                logger.info("[Room] World %d resolved %d votes -> keyboard=%s mouse=%s", world_id, vote_count, result["keyboard"], result["mouse"])
+                return result
 
-        return {"keyboard": "q", "mouse": "u"}
+        return self._random_action()
 
     def _parse_action(self, action_data: dict) -> dict:
         """Parse action from WebSocket message to tensor format."""
@@ -1586,20 +1561,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif msg_type == "action":
                 if inference_engine and inference_engine.is_running:
+                    # Host actions always go to action_queue (world 0 always reads from it)
+                    await inference_engine.action_queue.put(data)
                     if room_state and room_state.is_active:
                         kb = data.get("keyboard", "q")
                         ms = data.get("mouse", "u")
-                        room_state.votes.setdefault(0, []).append({"keyboard": kb, "mouse": ms})
-                        room_state.vote_event.set()
                         await _send_action_feed("Host", kb, ms)
-                        logger.info(
-                            "[WS %s] Host vote (%s) buffered=%d",
-                            client_label,
-                            _summarize_action_payload(data),
-                            len(room_state.votes.get(0, [])),
-                        )
-                    else:
-                        await inference_engine.action_queue.put(data)
                         logger.info(
                             "[WS %s] Queued action (%s) queue_size=%d",
                             client_label,
