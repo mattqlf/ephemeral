@@ -162,22 +162,13 @@
             text-transform: uppercase;
             transition: all 0.2s ease;
             min-width: 200px;
+            position: relative;
         }
 
         .cta:hover {
             border-color: var(--accent);
             color: var(--accent);
             box-shadow: 0 0 20px rgba(0, 212, 170, 0.2);
-        }
-
-        .cta::before {
-            content: '>';
-            opacity: 0;
-            transition: opacity 0.2s;
-        }
-
-        .cta:hover::before {
-            opacity: 1;
         }
 
         .cta-sub {
