@@ -65,6 +65,7 @@ Then open `http://<your-server-ip>:8888` in your browser.
 |------|-------------|
 | `--resolution WxH` | Output resolution (default: `640x352`). Supported: `832x480`, `1280x720`, `480x832`, `720x1280` |
 | `--num-frames N` | Frames per generation block (default: 3). Higher = more temporal context per block |
+| `--num-worlds N` | Parallel worlds (1, 2, or 4). Displayed in a grid, each diverging from independent actions |
 | `--fast` | Use 2 denoising steps instead of 3 (~33% faster, slight quality loss) |
 | `--no-compile` | Skip torch.compile for faster startup (implies --no-warmup) |
 | `--port` | Server port (default: 8080) |
@@ -79,6 +80,24 @@ Then open `http://<your-server-ip>:8888` in your browser.
 | U | No camera movement |
 
 Press any movement key to move (camera defaults to neutral). Press any camera key to look (movement defaults to neutral).
+
+### Parallel Worlds
+
+Run multiple worlds from the same starting image to see how different actions cause them to diverge:
+
+```bash
+uv run python -m apps.servers.web_server \
+    --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
+    --num-worlds 4 --no-compile
+```
+
+- **N=1** (default): single world, identical to normal mode
+- **N=2**: side-by-side split. You control world 1; world 2 acts randomly
+- **N=4**: 2x2 grid. You control world 1; worlds 2-4 act randomly
+
+Each world runs at 1/N the normal frame rate. In multiplayer, remote players can choose which world to control.
+
+Extra VRAM: ~1.4 GB per additional world (KV caches). N=4 on an 80GB A100 fits comfortably.
 
 ## CLI Usage
 
