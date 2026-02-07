@@ -1649,8 +1649,20 @@
                     setupWorlds(numW, resW, resH);
                     break;
                 }
-                case 'request_action': setStatus(`Block ${msg.block}`, 'waiting'); startInputSequence(); break;
-                case 'block_complete': setStatus(`Block ${msg.block} done`, 'connected'); resetInputState(); break;
+                case 'request_action':
+                    // Only prompt for input on world 0 (host world)
+                    if ((msg.world_id || 0) === 0) {
+                        setStatus(`Block ${msg.block}`, 'waiting');
+                        startInputSequence();
+                    }
+                    break;
+                case 'block_complete':
+                    // Only update UI state based on world 0's blocks
+                    if ((msg.world_id || 0) === 0) {
+                        setStatus(`Block ${msg.block} done`, 'connected');
+                        resetInputState();
+                    }
+                    break;
                 case 'generating_image':
                     setStatus('Gemini generating...', 'waiting');
                     inputDisplay.textContent = `> ${msg.message || 'generating world with Gemini...'}`;
@@ -1973,17 +1985,22 @@
             const done = new Promise((resolve) => { recorder.onstop = resolve; });
             recorder.start();
 
-            // Group frames by block+frame index so multi-world frames render together
-            // Each "tick" is a set of frames (one per world) with the same block
-            const ticks = [];
-            let currentTick = null;
+            // Separate frames by world, then zip by index so all worlds play simultaneously
+            const worldFrames = {};
             for (const frame of recordedFrames) {
-                const key = `${frame.block}`;
-                if (!currentTick || currentTick.key !== key || currentTick.frames.has(frame.worldId)) {
-                    currentTick = { key, frames: new Map() };
-                    ticks.push(currentTick);
+                if (!worldFrames[frame.worldId]) worldFrames[frame.worldId] = [];
+                worldFrames[frame.worldId].push(frame);
+            }
+            const maxLen = Math.max(...Object.values(worldFrames).map(f => f.length));
+            const ticks = [];
+            for (let ti = 0; ti < maxLen; ti++) {
+                const tick = new Map();
+                for (let wId = 0; wId < numWorlds; wId++) {
+                    if (worldFrames[wId] && worldFrames[wId][ti]) {
+                        tick.set(wId, worldFrames[wId][ti]);
+                    }
                 }
-                currentTick.frames.set(frame.worldId, frame);
+                ticks.push(tick);
             }
 
             const total = ticks.length;
@@ -1997,7 +2014,7 @@
 
                 // Draw each world into its grid slot
                 for (let wId = 0; wId < numWorlds; wId++) {
-                    const frame = tick.frames.get(wId);
+                    const frame = tick.get(wId);
                     if (!frame) continue;
 
                     const col = wId % cols;
