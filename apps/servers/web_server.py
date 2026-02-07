@@ -849,29 +849,66 @@ class InferenceEngine:
     async def _get_next_action(self, world_id: int = 0) -> Optional[dict]:
         """Get next action for a world.
 
-        world_id=0 (host world): always reads from action_queue (blocking).
-            Host actions are routed to action_queue regardless of room state,
-            avoiding race conditions when a room opens/closes mid-inference.
-        world_id>0: non-blocking — resolve buffered room votes or return random.
+        All inputs are votes. In room mode, buffered votes are resolved by
+        majority; if none buffered, block until the first vote arrives.
+        In solo mode, world 0 reads from action_queue; other worlds use random.
+
+        Handles solo<->room transitions via a sentinel pushed into action_queue
+        when a room opens (see open_room handler).
         """
         global room_state
 
-        # World 0 (host): always consume from action_queue
-        if world_id == 0:
-            return await asyncio.wait_for(self.action_queue.get(), timeout=120.0)
+        while True:
+            rs = room_state
 
-        # Other worlds: check room votes, fall back to random
-        rs = room_state
-        if rs and rs.is_active:
+            # ── Solo mode ──
+            if rs is None or not rs.is_active:
+                if world_id == 0:
+                    action = await asyncio.wait_for(self.action_queue.get(), timeout=120.0)
+                    if action and action.get("_room_transition"):
+                        continue  # Room just opened — re-enter loop in room mode
+                    return action
+                return self._random_action()
+
+            # ── Room mode: check buffered votes ──
             world_votes = rs.votes.get(world_id, [])
             if world_votes:
                 result = _resolve_votes(world_votes)
                 vote_count = len(world_votes)
                 rs.votes[world_id] = []
-                logger.info("[Room] World %d resolved %d votes -> keyboard=%s mouse=%s", world_id, vote_count, result["keyboard"], result["mouse"])
+                logger.info("[Room] World %d resolved %d votes -> keyboard=%s mouse=%s",
+                            world_id, vote_count, result["keyboard"], result["mouse"])
                 return result
 
-        return self._random_action()
+            # No votes buffered — non-host worlds with no controller get random
+            if world_id > 0:
+                has_controller = any(wid == world_id for wid in rs.player_worlds.values())
+                if not has_controller:
+                    return self._random_action()
+
+            # Wait for a vote (any world) or room closure
+            rs.vote_event.clear()
+            try:
+                await asyncio.wait_for(rs.vote_event.wait(), timeout=120.0)
+            except asyncio.TimeoutError:
+                return {"keyboard": "q", "mouse": "u"}
+
+            # Room may have closed while waiting — loop back to re-check
+            if room_state is None or not room_state.is_active:
+                continue
+
+            # Re-check votes after waking
+            world_votes = rs.votes.get(world_id, [])
+            if world_votes:
+                result = _resolve_votes(world_votes)
+                vote_count = len(world_votes)
+                rs.votes[world_id] = []
+                logger.info("[Room] World %d resolved %d votes (after wait) -> keyboard=%s mouse=%s",
+                            world_id, vote_count, result["keyboard"], result["mouse"])
+                return result
+
+            # Woke up from vote for a different world — loop back
+            continue
 
     def _parse_action(self, action_data: dict) -> dict:
         """Parse action from WebSocket message to tensor format."""
@@ -1561,12 +1598,16 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif msg_type == "action":
                 if inference_engine and inference_engine.is_running:
-                    # Host actions always go to action_queue (world 0 always reads from it)
-                    await inference_engine.action_queue.put(data)
                     if room_state and room_state.is_active:
+                        # Room mode: host action is a vote for world 0
                         kb = data.get("keyboard", "q")
                         ms = data.get("mouse", "u")
+                        room_state.votes.setdefault(0, []).append({"keyboard": kb, "mouse": ms})
+                        room_state.vote_event.set()
                         await _send_action_feed("Host", kb, ms)
+                    else:
+                        # Solo mode: direct to action_queue
+                        await inference_engine.action_queue.put(data)
                         logger.info(
                             "[WS %s] Queued action (%s) queue_size=%d",
                             client_label,
@@ -1582,6 +1623,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 else:
                     rid = _generate_room_id()
                     room_state = RoomState(room_id=rid, host_ws=websocket)
+                    # Unblock _get_next_action if it's waiting on action_queue in solo mode
+                    if inference_engine and inference_engine.is_running:
+                        await inference_engine.action_queue.put({"_room_transition": True})
                     lan_ip = _get_lan_ip()
                     url = f"http://{lan_ip}:{server_port}/room/{rid}"
                     logger.info("[WS %s] Room opened: %s -> %s", client_label, rid, url)
