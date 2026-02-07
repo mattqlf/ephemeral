@@ -740,7 +740,7 @@ class InferenceEngine:
             except Exception:
                 pass
 
-    async def _generate_caption(self, frame: np.ndarray, block_num: int, websocket):
+    async def _generate_caption(self, frame: np.ndarray, block_num: int, websocket, world_id: int = 0):
         """Send a frame to Claude and get a caption + visibility-optimized color.
 
         Runs entirely in a thread executor so the event loop (and inference) are never blocked.
@@ -748,7 +748,7 @@ class InferenceEngine:
         """
         client_label = _websocket_client_label(websocket)
         caption_start = time.perf_counter()
-        logger.info("[Caption %s] Starting caption for block %d", client_label, block_num)
+        logger.info("[Caption %s] Starting caption for block %d world %d", client_label, block_num, world_id)
         try:
             img = Image.fromarray(frame.astype(np.uint8))
             buf = io.BytesIO()
@@ -812,6 +812,7 @@ class InferenceEngine:
                 "block": block_num,
                 "text": caption_text,
                 "color": color,
+                "world_id": world_id,
             })
 
             caption_elapsed = time.perf_counter() - caption_start
@@ -1185,7 +1186,7 @@ class InferenceEngine:
                 logger.warning("[UI %s] Block %d action timeout; using neutral action", client_label, block_num)
 
             # Process each world sequentially
-            world0_last_frame = None
+            world_last_frames = {}
             for w_id in range(num_worlds):
                 world = self.worlds[w_id]
 
@@ -1282,9 +1283,8 @@ class InferenceEngine:
                         return
                     await asyncio.sleep(0.01)  # pacing per frame
 
-                # Capture world 0's last frame for captioning
-                if w_id == 0:
-                    world0_last_frame = video_np[-1]
+                # Capture each world's last frame for captioning
+                world_last_frames[w_id] = video_np[-1]
 
                 if num_worlds > 1:
                     logger.info("[UI %s] Block %d world %d done (%s)", client_label, block_num, w_id, _summarize_action_payload(action))
@@ -1296,9 +1296,10 @@ class InferenceEngine:
             current_start_frame += num_frame_per_block
             generated_blocks += 1
 
-            # Caption from world 0 every 3 blocks
-            if block_num % 3 == 1 and world0_last_frame is not None:
-                asyncio.create_task(self._generate_caption(world0_last_frame, block_num, websocket))
+            # Caption for each world every 3 blocks (all fire concurrently)
+            if block_num % 3 == 1:
+                for w_id, last_frame in world_last_frames.items():
+                    asyncio.create_task(self._generate_caption(last_frame, block_num, websocket, world_id=w_id))
 
             block_elapsed = time.perf_counter() - block_started_at
             logger.info(

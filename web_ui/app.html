@@ -170,6 +170,12 @@
             pointer-events: none;
         }
 
+        /* Smaller captions in multi-world grids */
+        .worlds-grid.worlds-2 .caption-text,
+        .worlds-grid.worlds-4 .caption-text {
+            font-size: 11px;
+        }
+
         .world-cell canvas {
             position: absolute;
             top: 50%;
@@ -205,12 +211,12 @@
 
         .caption-overlay {
             position: absolute;
-            bottom: 40px;
+            bottom: 10%;
             left: 0;
             right: 0;
             text-align: center;
             pointer-events: none;
-            padding: 0 30px;
+            padding: 0 10px;
         }
 
         .caption-text {
@@ -961,9 +967,7 @@
                         <canvas id="videoCanvas" width="640" height="352"></canvas>
                     </div>
                 </div>
-                <div class="caption-overlay">
-                    <span class="caption-text" id="captionText"></span>
-                </div>
+                <!-- captions are created per-world-cell by setupWorlds() -->
                 <div class="video-overlay">
                     <span id="inputDisplay">> waiting for input...</span>
                 </div>
@@ -1124,7 +1128,7 @@
         let canvas = document.getElementById('videoCanvas');
         let ctx = canvas.getContext('2d');
         const worldsGrid = document.getElementById('worldsGrid');
-        let worldCanvases = [{canvas, ctx}];  // array of {canvas, ctx} per world
+        let worldCanvases = [{canvas, ctx, captionEl: null}];  // array of {canvas, ctx, captionEl} per world
         let numWorlds = 1;
         const statusDot = document.getElementById('statusDot');
         const statusText = document.getElementById('statusText');
@@ -1155,7 +1159,6 @@
         const musicLabel = document.getElementById('musicLabel');
         const musicDot = document.getElementById('musicDot');
         const musicPlayBtn = document.getElementById('musicPlayBtn');
-        const captionText = document.getElementById('captionText');
         const exportBtn = document.getElementById('exportBtn');
         const exportBar = document.getElementById('exportBar');
         const exportLabel = document.getElementById('exportLabel');
@@ -1187,8 +1190,17 @@
                     label.textContent = `World ${i + 1}`;
                     cell.appendChild(label);
                 }
+                // Per-world caption overlay
+                const capOverlay = document.createElement('div');
+                capOverlay.className = 'caption-overlay';
+                const capSpan = document.createElement('span');
+                capSpan.className = 'caption-text';
+                capSpan.id = `captionText-${i}`;
+                capOverlay.appendChild(capSpan);
+                cell.appendChild(capOverlay);
+
                 worldsGrid.appendChild(cell);
-                worldCanvases.push({canvas: c, ctx: c.getContext('2d')});
+                worldCanvases.push({canvas: c, ctx: c.getContext('2d'), captionEl: capSpan});
             }
             // Update primary canvas/ctx references to world 0
             canvas = worldCanvases[0].canvas;
@@ -1197,8 +1209,8 @@
         }
 
         let roomOpen = false;
-        let captionFadeTimer = null;
-        let captionTypeTimer = null;
+        let captionFadeTimers = {};   // world_id -> timeout id
+        let captionTypeTimers = {};   // world_id -> interval id
         let recordedFrames = [];
         let pendingMusicUrls = null;  // stored when autoplay fails
         let lastSentKeyboard = 'q';
@@ -1540,43 +1552,52 @@
                 case 'error':
                     setStatus('Error', 'error'); isRunning = false;
                     startBtn.disabled = false; stopBtn.disabled = true; resetInputState(); break;
-                case 'caption':
-                    // Typewriter effect driven locally — no event loop blocking
-                    clearTimeout(captionFadeTimer);
-                    clearInterval(captionTypeTimer);
-                    captionText.textContent = '';
-                    captionText.style.color = msg.color || '#e0e0e0';
-                    captionText.style.textShadow = `0 0 8px ${msg.color || '#e0e0e0'}40, 0 1px 3px rgba(0,0,0,0.9)`;
-                    captionText.className = 'caption-text visible';
+                case 'caption': {
+                    // Typewriter effect driven locally — per-world captions
+                    const capWorldId = msg.world_id || 0;
+                    const wc = worldCanvases[capWorldId];
+                    const capEl = wc ? wc.captionEl : null;
+                    if (!capEl) break;
+
+                    clearTimeout(captionFadeTimers[capWorldId]);
+                    clearInterval(captionTypeTimers[capWorldId]);
+                    capEl.textContent = '';
+                    capEl.style.color = msg.color || '#e0e0e0';
+                    capEl.style.textShadow = `0 0 8px ${msg.color || '#e0e0e0'}40, 0 1px 3px rgba(0,0,0,0.9)`;
+                    capEl.className = 'caption-text visible';
 
                     const fullCaption = msg.text || '';
-                    activeCaptionText = fullCaption;
-                    activeCaptionColor = msg.color || '#e0e0e0';
+                    // Track world 0 caption for timelapse recording
+                    if (capWorldId === 0) {
+                        activeCaptionText = fullCaption;
+                        activeCaptionColor = msg.color || '#e0e0e0';
+                    }
                     let charIdx = 0;
-                    // Add cursor
                     const typeCursor = document.createElement('span');
                     typeCursor.className = 'caption-cursor';
                     typeCursor.style.background = msg.color || 'var(--accent)';
-                    captionText.appendChild(typeCursor);
+                    capEl.appendChild(typeCursor);
 
-                    captionTypeTimer = setInterval(() => {
+                    captionTypeTimers[capWorldId] = setInterval(() => {
                         if (charIdx < fullCaption.length) {
                             typeCursor.remove();
-                            captionText.insertAdjacentText('beforeend', fullCaption[charIdx]);
-                            captionText.appendChild(typeCursor);
+                            capEl.insertAdjacentText('beforeend', fullCaption[charIdx]);
+                            capEl.appendChild(typeCursor);
                             charIdx++;
                         } else {
-                            clearInterval(captionTypeTimer);
+                            clearInterval(captionTypeTimers[capWorldId]);
                             typeCursor.remove();
-                            // Fade out after 4 seconds
-                            captionFadeTimer = setTimeout(() => {
-                                captionText.className = 'caption-text fading';
-                                activeCaptionText = '';
-                                activeCaptionColor = '';
+                            captionFadeTimers[capWorldId] = setTimeout(() => {
+                                capEl.className = 'caption-text fading';
+                                if (capWorldId === 0) {
+                                    activeCaptionText = '';
+                                    activeCaptionColor = '';
+                                }
                             }, 4000);
                         }
-                    }, 35); // ~28 chars/sec typewriter speed
+                    }, 35);
                     break;
+                }
                 case 'room_opened': {
                     roomOpen = true;
                     roomBtn.textContent = '> Close Room';
@@ -1718,6 +1739,13 @@
                 recordedFrames = [];
                 exportBtn.style.display = 'none';
                 exportBar.style.display = 'none';
+                // Clear per-world caption timers
+                Object.values(captionFadeTimers).forEach(t => clearTimeout(t));
+                Object.values(captionTypeTimers).forEach(t => clearInterval(t));
+                captionFadeTimers = {};
+                captionTypeTimers = {};
+                activeCaptionText = '';
+                activeCaptionColor = '';
                 setupWorlds(1);  // reset to single world; server will send num_worlds in ready
 
                 const prompt = promptInput.value.trim();
