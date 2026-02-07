@@ -1047,6 +1047,16 @@ class InferenceEngine:
             conditional_dict['keyboard_cond'] = keyboard_condition
             logger.info("[UI %s] Conditions ready (keys=%s)", client_label, list(conditional_dict.keys()))
 
+            # Send ready signal first so frontend can set up the multi-world grid
+            if not await self._send_ws(websocket, {
+                "type": "ready",
+                "mode": self.mode,
+                "resolution": f"{self.res_width}x{self.res_height}",
+                "num_worlds": self.num_worlds,
+                "message": "Ready for input. Press keys to control."
+            }):
+                return
+
             # Send initial frame for each world (all start with the same image)
             init_frame = np.array(image.resize((self.res_width, self.res_height)))
             init_b64 = self._frame_to_base64(init_frame)
@@ -1058,16 +1068,6 @@ class InferenceEngine:
                     "world_id": w_id,
                 }):
                     return
-
-            # Send ready signal
-            if not await self._send_ws(websocket, {
-                "type": "ready",
-                "mode": self.mode,
-                "resolution": f"{self.res_width}x{self.res_height}",
-                "num_worlds": self.num_worlds,
-                "message": "Ready for input. Press keys to control."
-            }):
-                return
             logger.info("[UI %s] Ready; waiting for interactive actions", client_label)
 
             # Run inference loop

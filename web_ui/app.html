@@ -1172,8 +1172,10 @@
         const roomPlayers = document.getElementById('roomPlayers');
         const actionFeed = document.getElementById('actionFeed');
 
-        function setupWorlds(n) {
+        function setupWorlds(n, width, height) {
             numWorlds = n;
+            const canvasW = width || canvas.width;
+            const canvasH = height || canvas.height;
             worldsGrid.innerHTML = '';
             worldsGrid.className = `worlds-grid worlds-${n}`;
             worldCanvases = [];
@@ -1181,8 +1183,8 @@
                 const cell = document.createElement('div');
                 cell.className = 'world-cell' + (i === 0 ? ' active' : '');
                 const c = document.createElement('canvas');
-                c.width = canvas.width;
-                c.height = canvas.height;
+                c.width = canvasW;
+                c.height = canvasH;
                 cell.appendChild(c);
                 if (n > 1) {
                     const label = document.createElement('div');
@@ -1510,16 +1512,17 @@
         function handleMessage(msg) {
             switch (msg.type) {
                 case 'frame': displayFrame(msg.data, msg.block, msg.world_id || 0); blockNum.textContent = msg.block; break;
-                case 'ready':
+                case 'ready': {
                     setStatus('Ready', 'waiting');
-                    if (msg.num_worlds && msg.num_worlds > 1) setupWorlds(msg.num_worlds);
+                    const numW = msg.num_worlds || 1;
+                    let resW, resH;
                     if (msg.resolution) {
+                        [resW, resH] = msg.resolution.split('x').map(Number);
                         document.getElementById('resDisplay').textContent = msg.resolution;
-                        const [w, h] = msg.resolution.split('x').map(Number);
-                        worldCanvases.forEach(wc => { wc.canvas.width = w; wc.canvas.height = h; });
-                        resizeCanvases();
                     }
+                    setupWorlds(numW, resW, resH);
                     break;
+                }
                 case 'request_action': setStatus(`Block ${msg.block}`, 'waiting'); startInputSequence(); break;
                 case 'block_complete': setStatus(`Block ${msg.block} done`, 'connected'); resetInputState(); break;
                 case 'generating_image':
