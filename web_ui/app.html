@@ -1024,6 +1024,111 @@
             color: var(--text);
             font-weight: 500;
         }
+
+        /* ── Paint Mode ── */
+        .paint-toggle {
+            position: absolute;
+            top: 10px;
+            right: 40px;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: var(--text-dim);
+            padding: 5px 8px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            z-index: 5;
+            transition: all 0.2s;
+            line-height: 1;
+            display: none;
+        }
+        .paint-toggle:hover { border-color: var(--accent); color: var(--text); }
+        .paint-toggle.active { border-color: var(--accent); color: var(--accent); background: rgba(0, 212, 170, 0.1); }
+
+        .paint-toolbar {
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            display: none;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            background: rgba(10, 10, 10, 0.92);
+            border-bottom: 1px solid var(--border-light);
+            z-index: 8;
+            flex-wrap: wrap;
+        }
+        .paint-toolbar.visible { display: flex; }
+
+        .paint-hint {
+            font-size: 9px;
+            color: #666;
+        }
+        .paint-spacer { flex: 1; }
+
+        .paint-apply-btn {
+            padding: 4px 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 9px;
+            background: var(--accent);
+            border: 1px solid var(--accent);
+            color: var(--bg);
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            font-weight: bold;
+        }
+        .paint-apply-btn:hover { background: #00e8bb; }
+
+        .paint-layer {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 6;
+            pointer-events: none;
+        }
+        .paint-layer.active {
+            pointer-events: auto;
+        }
+
+        .paint-pasted-object {
+            position: absolute;
+            cursor: move;
+            border: 1px dashed rgba(0, 212, 170, 0.5);
+            box-shadow: 0 0 0 1px rgba(0,0,0,0.3);
+        }
+        .paint-pasted-object.selected { border-color: var(--accent); }
+        .paint-pasted-object img {
+            display: block;
+            width: 100%; height: 100%;
+            pointer-events: none;
+            image-rendering: auto;
+        }
+
+        .paint-resize-handle {
+            position: absolute;
+            width: 10px; height: 10px;
+            background: var(--accent);
+            border: 1px solid var(--bg);
+            z-index: 8;
+        }
+        .paint-resize-handle.tl { top: -5px; left: -5px; cursor: nw-resize; }
+        .paint-resize-handle.tr { top: -5px; right: -5px; cursor: ne-resize; }
+        .paint-resize-handle.bl { bottom: -5px; left: -5px; cursor: sw-resize; }
+        .paint-resize-handle.br { bottom: -5px; right: -5px; cursor: se-resize; }
+
+        .paint-delete-handle {
+            position: absolute;
+            top: -16px; right: -2px;
+            width: 14px; height: 14px;
+            background: #ff4444;
+            color: #fff;
+            font-size: 9px;
+            line-height: 14px;
+            text-align: center;
+            cursor: pointer;
+            z-index: 8;
+        }
+        .paint-delete-handle:hover { background: #ff6666; }
     </style>
 </head>
 <body>
@@ -1055,7 +1160,13 @@
                 <div class="video-overlay">
                     <span id="inputDisplay">> waiting for input...</span>
                 </div>
+                <button class="paint-toggle" id="paintToggle" title="Paint mode (P)">Paint</button>
                 <button class="fullscreen-btn" id="fullscreenBtn" title="Toggle fullscreen">&#x26F6;</button>
+                <div class="paint-toolbar" id="paintToolbar">
+                    <span class="paint-hint">Paste (Ctrl+V) or drag & drop images</span>
+                    <div class="paint-spacer"></div>
+                    <button class="paint-apply-btn" id="paintApplyBtn">Apply</button>
+                </div>
                 <div class="fullscreen-controls">
                     <div>
                         <div class="key-grid">
@@ -1333,6 +1444,11 @@
             // Update primary canvas/ctx references to world 0
             canvas = worldCanvases[0].canvas;
             ctx = worldCanvases[0].ctx;
+            // Reset paint layer (old cell was destroyed)
+            paintLayer = null;
+            paintObjects = [];
+            paintSelected = null;
+            if (paintMode) initPaintLayer();
             resizeCanvases();
         }
 
@@ -1345,6 +1461,15 @@
         let lastSentMouse = 'u';
         let activeCaptionText = '';
         let activeCaptionColor = '';
+
+        // ── Paint mode state ──
+        const paintToggle = document.getElementById('paintToggle');
+        const paintToolbar = document.getElementById('paintToolbar');
+        let paintMode = false;
+        let paintObjects = [];   // { el, x, y, w, h, imgSrc }
+        let paintSelected = null;
+        let paintDragState = null;
+        let paintLayer = null;     // the container div
 
         function setMusicState(state, text) {
             // state: 'generating' | 'error' | 'playing' | 'paused' | 'idle'
@@ -1680,6 +1805,8 @@
                 case 'complete': case 'stopped':
                     setStatus(msg.type === 'complete' ? 'Complete' : 'Stopped', 'connected');
                     isRunning = false; startBtn.disabled = false; stopBtn.disabled = true;
+                    if (paintMode) togglePaintMode();
+                    paintToggle.style.display = 'none';
                     resetRoomUI();
                     resetInputState(); inputDisplay.textContent = `> ${msg.type}`;
                     if (recordedFrames.length > 1) {
@@ -1808,6 +1935,20 @@
         document.addEventListener('keydown', (e) => {
             if (e.target === promptInput) return;
             const k = e.key.toLowerCase();
+            // Paint mode toggle
+            if (k === 'p' && isRunning && !e.metaKey && !e.ctrlKey) {
+                togglePaintMode();
+                return;
+            }
+            // Suppress game keys when painting
+            if (paintMode) {
+                if ((k === 'delete' || k === 'backspace') && paintSelected) {
+                    e.preventDefault();
+                    paintRemoveObject(paintSelected);
+                }
+                if (k === 'escape') togglePaintMode();
+                return;
+            }
             if (CAMERA_KEYS.includes(k)) handleCameraInput(k);
             else if (MOVEMENT_KEYS.includes(k)) handleMovementInput(k);
         });
@@ -1870,6 +2011,8 @@
             if (ws?.readyState === WebSocket.OPEN) {
                 isRunning = true; startBtn.disabled = true; stopBtn.disabled = false;
                 resetInputState();
+                if (paintMode) togglePaintMode();
+                paintToggle.style.display = 'block';
                 bgMusic.pause(); bgMusic.src = '';
                 pendingMusicUrls = null;
                 musicBar.style.display = 'none';
@@ -2128,6 +2271,12 @@
                 }
                 wc.canvas.style.width = width + 'px';
                 wc.canvas.style.height = height + 'px';
+
+                // Keep paint layer sized to match world 0's canvas
+                if (paintLayer && wc === worldCanvases[0]) {
+                    paintLayer.style.width = width + 'px';
+                    paintLayer.style.height = height + 'px';
+                }
             });
         }
 
@@ -2164,6 +2313,277 @@
             fullscreenBtn.textContent = document.fullscreenElement ? '\u2715' : '\u26F6';
             resizeCanvases();
         });
+
+        // ── Paint System (image paste + move/resize) ──
+        function initPaintLayer() {
+            const cell = worldCanvases[0].canvas.parentElement;
+            if (!cell) return;
+
+            if (paintLayer) { paintLayer.remove(); paintLayer = null; }
+            paintObjects.forEach(o => o.el.remove());
+            paintObjects = [];
+            paintSelected = null;
+
+            paintLayer = document.createElement('div');
+            paintLayer.className = 'paint-layer';
+            paintLayer.id = 'paintLayer';
+            cell.appendChild(paintLayer);
+
+            // Match video canvas size
+            const vc = worldCanvases[0].canvas;
+            paintLayer.style.width = vc.style.width;
+            paintLayer.style.height = vc.style.height;
+
+            // Click on empty area deselects
+            paintLayer.addEventListener('mousedown', () => paintDeselectAll());
+
+            // Drag-drop images onto paint layer
+            paintLayer.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+            paintLayer.addEventListener('drop', (e) => {
+                e.preventDefault();
+                const file = e.dataTransfer.files[0];
+                if (file && file.type.startsWith('image/')) {
+                    const url = URL.createObjectURL(file);
+                    const pos = paintGetPos(e);
+                    paintAddImage(url, pos.x, pos.y);
+                }
+            });
+        }
+
+        function togglePaintMode() {
+            paintMode = !paintMode;
+            paintToggle.classList.toggle('active', paintMode);
+
+            if (paintMode) {
+                if (!paintLayer) initPaintLayer();
+                paintLayer.classList.add('active');
+                paintToolbar.classList.add('visible');
+            } else {
+                if (paintLayer) paintLayer.classList.remove('active');
+                paintToolbar.classList.remove('visible');
+                paintDeselectAll();
+            }
+        }
+
+        paintToggle.addEventListener('click', () => { if (isRunning) togglePaintMode(); });
+
+        function paintGetPos(e) {
+            if (!paintLayer) return { x: 0, y: 0 };
+            const rect = paintLayer.getBoundingClientRect();
+            return {
+                x: (e.clientX - rect.left) * (canvas.width / rect.width),
+                y: (e.clientY - rect.top) * (canvas.height / rect.height),
+            };
+        }
+
+        // ── Paste images ──
+        document.addEventListener('paste', (e) => {
+            if (!paintMode) return;
+            for (const item of e.clipboardData?.items || []) {
+                if (item.type.startsWith('image/')) {
+                    e.preventDefault();
+                    const blob = item.getAsFile();
+                    const url = URL.createObjectURL(blob);
+                    paintAddImage(url);
+                    break;
+                }
+            }
+        });
+
+        function paintAddImage(src, dropX, dropY) {
+            if (!paintLayer) return;
+
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => {
+                let w = img.width, h = img.height;
+                const cw = canvas.width, ch = canvas.height;
+                const maxW = cw * 0.35, maxH = ch * 0.45;
+                if (w > maxW) { h *= maxW / w; w = maxW; }
+                if (h > maxH) { w *= maxH / h; h = maxH; }
+                w = Math.round(w);
+                h = Math.round(h);
+
+                const x = dropX !== undefined ? dropX - w / 2 : (cw - w) / 2;
+                const y = dropY !== undefined ? dropY - h / 2 : (ch - h) / 2;
+
+                const el = document.createElement('div');
+                el.className = 'paint-pasted-object selected';
+                el.style.left = (x / cw * 100) + '%';
+                el.style.top = (y / ch * 100) + '%';
+                el.style.width = (w / cw * 100) + '%';
+                el.style.height = (h / ch * 100) + '%';
+
+                const imgEl = document.createElement('img');
+                imgEl.src = src;
+                el.appendChild(imgEl);
+
+                ['tl','tr','bl','br'].forEach(pos => {
+                    const handle = document.createElement('div');
+                    handle.className = `paint-resize-handle ${pos}`;
+                    handle.dataset.handle = pos;
+                    el.appendChild(handle);
+                });
+
+                const del = document.createElement('div');
+                del.className = 'paint-delete-handle';
+                del.textContent = '\u00d7';
+                del.addEventListener('click', (ev) => {
+                    ev.stopPropagation();
+                    paintRemoveObject(obj);
+                });
+                el.appendChild(del);
+
+                paintLayer.appendChild(el);
+
+                const obj = { el, x, y, w, h, imgSrc: src };
+                paintObjects.push(obj);
+                paintSelectObject(obj);
+
+                // Drag to move
+                el.addEventListener('mousedown', (ev) => {
+                    if (ev.target.classList.contains('paint-resize-handle')) return;
+                    if (ev.target.classList.contains('paint-delete-handle')) return;
+                    ev.stopPropagation();
+                    paintSelectObject(obj);
+                    paintDragState = {
+                        type: 'move',
+                        startX: ev.clientX, startY: ev.clientY,
+                        origX: obj.x, origY: obj.y,
+                    };
+                });
+
+                el.querySelectorAll('.paint-resize-handle').forEach(handle => {
+                    handle.addEventListener('mousedown', (ev) => {
+                        ev.stopPropagation();
+                        paintSelectObject(obj);
+                        paintDragState = {
+                            type: 'resize',
+                            handle: handle.dataset.handle,
+                            startX: ev.clientX, startY: ev.clientY,
+                            origX: obj.x, origY: obj.y,
+                            origW: obj.w, origH: obj.h,
+                        };
+                    });
+                });
+            };
+            img.src = src;
+        }
+
+        function paintSelectObject(obj) {
+            paintDeselectAll();
+            paintSelected = obj;
+            obj.el.classList.add('selected');
+        }
+
+        function paintDeselectAll() {
+            paintSelected = null;
+            paintObjects.forEach(o => o.el.classList.remove('selected'));
+        }
+
+        function paintRemoveObject(obj) {
+            obj.el.remove();
+            paintObjects = paintObjects.filter(o => o !== obj);
+            if (paintSelected === obj) paintSelected = null;
+        }
+
+        // Global mouse move/up for paint object drag/resize
+        document.addEventListener('mousemove', (e) => {
+            if (!paintDragState || !paintSelected || !paintLayer) return;
+            const dx = e.clientX - paintDragState.startX;
+            const dy = e.clientY - paintDragState.startY;
+            const obj = paintSelected;
+            const rect = paintLayer.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const cw = canvas.width, ch = canvas.height;
+
+            if (paintDragState.type === 'move') {
+                obj.x = paintDragState.origX + dx * scaleX;
+                obj.y = paintDragState.origY + dy * scaleY;
+                obj.el.style.left = (obj.x / cw * 100) + '%';
+                obj.el.style.top = (obj.y / ch * 100) + '%';
+            } else if (paintDragState.type === 'resize') {
+                const sdx = dx * scaleX;
+                const sdy = dy * scaleY;
+                let { origX, origY, origW, origH, handle } = paintDragState;
+                let newX = origX, newY = origY, newW = origW, newH = origH;
+
+                if (handle.includes('r')) { newW = Math.max(20, origW + sdx); }
+                if (handle.includes('l')) { newW = Math.max(20, origW - sdx); newX = origX + sdx; }
+                if (handle.includes('b')) { newH = Math.max(20, origH + sdy); }
+                if (handle.includes('t')) { newH = Math.max(20, origH - sdy); newY = origY + sdy; }
+
+                obj.x = newX; obj.y = newY; obj.w = newW; obj.h = newH;
+                obj.el.style.left = (newX / cw * 100) + '%';
+                obj.el.style.top = (newY / ch * 100) + '%';
+                obj.el.style.width = (newW / cw * 100) + '%';
+                obj.el.style.height = (newH / ch * 100) + '%';
+            }
+        });
+
+        document.addEventListener('mouseup', () => { paintDragState = null; });
+
+        // ── Apply: composite pasted objects onto current frame ──
+        document.getElementById('paintApplyBtn').addEventListener('click', paintApply);
+
+        function paintApply() {
+            if (!paintLayer || !canvas || paintObjects.length === 0) return;
+            const cw = canvas.width, ch = canvas.height;
+
+            const composite = document.createElement('canvas');
+            composite.width = cw;
+            composite.height = ch;
+            const cCtx = composite.getContext('2d');
+
+            // 1. Current frame
+            cCtx.drawImage(canvas, 0, 0);
+
+            // 2. Pasted objects
+            const loadPromises = paintObjects.map(obj => {
+                return new Promise(resolve => {
+                    const img = new Image();
+                    img.crossOrigin = 'anonymous';
+                    img.onload = () => {
+                        cCtx.drawImage(img, obj.x, obj.y, obj.w, obj.h);
+                        resolve();
+                    };
+                    img.onerror = resolve;
+                    img.src = obj.imgSrc;
+                });
+            });
+
+            Promise.all(loadPromises).then(() => {
+                // Render composite to display canvas
+                ctx.clearRect(0, 0, cw, ch);
+                ctx.drawImage(composite, 0, 0);
+
+                // Record composited frame for timelapse
+                const paintedB64 = composite.toDataURL('image/jpeg', 0.9).split(',')[1];
+                const lastBlock = recordedFrames.length > 0 ?
+                    recordedFrames[recordedFrames.length - 1].block : 0;
+                recordedFrames.push({
+                    b64: paintedB64,
+                    block: lastBlock,
+                    worldId: 0,
+                    keyboard: 'q',
+                    mouse: 'u',
+                    caption: activeCaptionText,
+                    captionColor: activeCaptionColor,
+                });
+
+                // Clear objects
+                paintObjects.forEach(o => o.el.remove());
+                paintObjects = [];
+                paintSelected = null;
+
+                // Flash
+                const flash = document.createElement('div');
+                flash.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,212,170,0.15);z-index:9;pointer-events:none;';
+                paintLayer.appendChild(flash);
+                setTimeout(() => flash.remove(), 200);
+            });
+        }
 
         loadImages();
         connect();
