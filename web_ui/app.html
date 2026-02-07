@@ -1016,6 +1016,75 @@
             white-space: nowrap;
         }
 
+        /* Modal player grid (up to 8 players) */
+        .modal-player-grid {
+            display: grid;
+            width: 100%;
+            height: 100%;
+            gap: 2px;
+            background: #000;
+        }
+
+        .modal-player-grid.players-1 { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+        .modal-player-grid.players-2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+        .modal-player-grid.players-3,
+        .modal-player-grid.players-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+        .modal-player-grid.players-5,
+        .modal-player-grid.players-6 { grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr; }
+        .modal-player-grid.players-7,
+        .modal-player-grid.players-8 { grid-template-columns: 1fr 1fr 1fr 1fr; grid-template-rows: 1fr 1fr; }
+
+        .modal-player-cell {
+            position: relative;
+            background: #0a0a0a;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-player-cell canvas {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            max-width: 100%;
+            max-height: 100%;
+            image-rendering: pixelated;
+        }
+
+        .modal-player-name {
+            position: absolute;
+            top: 6px;
+            left: 8px;
+            font-size: 9px;
+            color: var(--accent);
+            z-index: 2;
+            pointer-events: none;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+        }
+
+        .modal-player-cell .caption-overlay {
+            position: absolute;
+            bottom: 10%;
+            left: 0;
+            right: 0;
+            text-align: center;
+            pointer-events: none;
+            padding: 0 10px;
+        }
+
+        .modal-player-cell .caption-text {
+            font-size: 11px;
+        }
+
+        .modal-player-cell .modal-player-waiting {
+            font-size: 9px;
+            color: var(--text-dim);
+            text-align: center;
+            letter-spacing: 0.05em;
+        }
+
         .feed-action {
             color: var(--text-dim);
         }
@@ -1025,110 +1094,6 @@
             font-weight: 500;
         }
 
-        /* ── Paint Mode ── */
-        .paint-toggle {
-            position: absolute;
-            top: 10px;
-            right: 40px;
-            background: rgba(0, 0, 0, 0.4);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            color: var(--text-dim);
-            padding: 5px 8px;
-            cursor: pointer;
-            font-family: 'Courier New', monospace;
-            font-size: 11px;
-            z-index: 5;
-            transition: all 0.2s;
-            line-height: 1;
-            display: none;
-        }
-        .paint-toggle:hover { border-color: var(--accent); color: var(--text); }
-        .paint-toggle.active { border-color: var(--accent); color: var(--accent); background: rgba(0, 212, 170, 0.1); }
-
-        .paint-toolbar {
-            position: absolute;
-            top: 0; left: 0; right: 0;
-            display: none;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 10px;
-            background: rgba(10, 10, 10, 0.92);
-            border-bottom: 1px solid var(--border-light);
-            z-index: 8;
-            flex-wrap: wrap;
-        }
-        .paint-toolbar.visible { display: flex; }
-
-        .paint-hint {
-            font-size: 9px;
-            color: #666;
-        }
-        .paint-spacer { flex: 1; }
-
-        .paint-apply-btn {
-            padding: 4px 10px;
-            font-family: 'Courier New', monospace;
-            font-size: 9px;
-            background: var(--accent);
-            border: 1px solid var(--accent);
-            color: var(--bg);
-            cursor: pointer;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            font-weight: bold;
-        }
-        .paint-apply-btn:hover { background: #00e8bb; }
-
-        .paint-layer {
-            position: absolute;
-            top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            z-index: 6;
-            pointer-events: none;
-        }
-        .paint-layer.active {
-            pointer-events: auto;
-        }
-
-        .paint-pasted-object {
-            position: absolute;
-            cursor: move;
-            border: 1px dashed rgba(0, 212, 170, 0.5);
-            box-shadow: 0 0 0 1px rgba(0,0,0,0.3);
-        }
-        .paint-pasted-object.selected { border-color: var(--accent); }
-        .paint-pasted-object img {
-            display: block;
-            width: 100%; height: 100%;
-            pointer-events: none;
-            image-rendering: auto;
-        }
-
-        .paint-resize-handle {
-            position: absolute;
-            width: 10px; height: 10px;
-            background: var(--accent);
-            border: 1px solid var(--bg);
-            z-index: 8;
-        }
-        .paint-resize-handle.tl { top: -5px; left: -5px; cursor: nw-resize; }
-        .paint-resize-handle.tr { top: -5px; right: -5px; cursor: ne-resize; }
-        .paint-resize-handle.bl { bottom: -5px; left: -5px; cursor: sw-resize; }
-        .paint-resize-handle.br { bottom: -5px; right: -5px; cursor: se-resize; }
-
-        .paint-delete-handle {
-            position: absolute;
-            top: -16px; right: -2px;
-            width: 14px; height: 14px;
-            background: #ff4444;
-            color: #fff;
-            font-size: 9px;
-            line-height: 14px;
-            text-align: center;
-            cursor: pointer;
-            z-index: 8;
-        }
-        .paint-delete-handle:hover { background: #ff6666; }
     </style>
 </head>
 <body>
@@ -1160,13 +1125,7 @@
                 <div class="video-overlay">
                     <span id="inputDisplay">> waiting for input...</span>
                 </div>
-                <button class="paint-toggle" id="paintToggle" title="Paint mode (P)">Paint</button>
                 <button class="fullscreen-btn" id="fullscreenBtn" title="Toggle fullscreen">&#x26F6;</button>
-                <div class="paint-toolbar" id="paintToolbar">
-                    <span class="paint-hint">Paste (Ctrl+V) or drag & drop images</span>
-                    <div class="paint-spacer"></div>
-                    <button class="paint-apply-btn" id="paintApplyBtn">Apply</button>
-                </div>
                 <div class="fullscreen-controls">
                     <div>
                         <div class="key-grid">
@@ -1289,10 +1248,16 @@
             <div class="room-section">
                 <div class="section-title"><span>></span> Multiplayer</div>
                 <button class="room-btn" id="roomBtn">> Open Room</button>
+                <button class="room-btn" id="modalRoomBtn">> Modal Room</button>
                 <div class="room-panel" id="roomPanel">
                     <div class="room-qr" id="roomQr"></div>
                     <div class="room-url" id="roomUrl"></div>
                     <div class="room-players" id="roomPlayers">0 players</div>
+                </div>
+                <div class="room-panel" id="modalRoomPanel">
+                    <div class="room-qr" id="modalRoomQr"></div>
+                    <div class="room-url" id="modalRoomUrl"></div>
+                    <div class="room-players" id="modalRoomPlayers">0 / 8 players</div>
                 </div>
                 <div class="action-feed" id="actionFeed"></div>
             </div>
@@ -1371,6 +1336,15 @@
         const roomPlayers = document.getElementById('roomPlayers');
         const actionFeed = document.getElementById('actionFeed');
 
+        const modalRoomBtn = document.getElementById('modalRoomBtn');
+        const modalRoomPanel = document.getElementById('modalRoomPanel');
+        const modalRoomQr = document.getElementById('modalRoomQr');
+        const modalRoomUrl = document.getElementById('modalRoomUrl');
+        const modalRoomPlayers = document.getElementById('modalRoomPlayers');
+
+        let modalRoomOpen = false;
+        let modalPlayerCells = {};  // player_id -> {canvas, ctx, captionEl, nameEl, cell}
+
         function setupWorlds(n, width, height) {
             numWorlds = n;
             const canvasW = width || canvas.width;
@@ -1444,11 +1418,6 @@
             // Update primary canvas/ctx references to world 0
             canvas = worldCanvases[0].canvas;
             ctx = worldCanvases[0].ctx;
-            // Reset paint layer (old cell was destroyed)
-            paintLayer = null;
-            paintObjects = [];
-            paintSelected = null;
-            if (paintMode) initPaintLayer();
             resizeCanvases();
         }
 
@@ -1461,16 +1430,6 @@
         let lastSentMouse = 'u';
         let activeCaptionText = '';
         let activeCaptionColor = '';
-
-        // ── Paint mode state ──
-        const paintToggle = document.getElementById('paintToggle');
-        const paintToolbar = document.getElementById('paintToolbar');
-        let paintMode = false;
-        let paintObjects = [];   // { el, x, y, w, h, imgSrc }
-        let paintSelected = null;
-        let paintDragState = null;
-        let paintLayer = null;     // the container div
-
         function setMusicState(state, text) {
             // state: 'generating' | 'error' | 'playing' | 'paused' | 'idle'
             musicBar.style.display = 'flex';
@@ -1805,8 +1764,6 @@
                 case 'complete': case 'stopped':
                     setStatus(msg.type === 'complete' ? 'Complete' : 'Stopped', 'connected');
                     isRunning = false; startBtn.disabled = false; stopBtn.disabled = true;
-                    if (paintMode) togglePaintMode();
-                    paintToggle.style.display = 'none';
                     resetRoomUI();
                     resetInputState(); inputDisplay.textContent = `> ${msg.type}`;
                     if (recordedFrames.length > 1) {
@@ -1911,6 +1868,44 @@
                         setMusicState('error', 'no audio returned');
                     }
                     break;
+
+                // ── Modal Room messages ──
+                case 'modal_room_opened': {
+                    modalRoomOpen = true;
+                    modalRoomBtn.textContent = '> Close Modal Room';
+                    modalRoomBtn.classList.add('active');
+                    modalRoomPanel.classList.add('visible');
+                    const roomPath = new URL(msg.url).pathname;
+                    const publicUrl = location.origin + roomPath;
+                    modalRoomUrl.textContent = publicUrl;
+                    modalRoomPlayers.textContent = '0 / 8 players';
+                    const qr = qrcode(0, 'M');
+                    qr.addData(publicUrl);
+                    qr.make();
+                    modalRoomQr.innerHTML = qr.createImgTag(3, 0);
+                    // Hide solo worlds grid, prepare for player grid
+                    worldsGrid.style.display = 'none';
+                    break;
+                }
+
+                case 'modal_room_closed':
+                    resetModalRoomUI();
+                    break;
+
+                case 'modal_room_update':
+                    modalRoomPlayers.textContent = `${msg.active_count} / ${msg.max_active} players`;
+                    if (msg.players) {
+                        setupModalGrid(msg.players);
+                    }
+                    break;
+
+                case 'modal_player_frame':
+                    displayModalPlayerFrame(msg.player_id, msg.data);
+                    break;
+
+                case 'modal_player_caption':
+                    showModalPlayerCaption(msg.player_id, msg.text, msg.color);
+                    break;
             }
         }
 
@@ -1935,20 +1930,6 @@
         document.addEventListener('keydown', (e) => {
             if (e.target === promptInput) return;
             const k = e.key.toLowerCase();
-            // Paint mode toggle
-            if (k === 'p' && isRunning && !e.metaKey && !e.ctrlKey) {
-                togglePaintMode();
-                return;
-            }
-            // Suppress game keys when painting
-            if (paintMode) {
-                if ((k === 'delete' || k === 'backspace') && paintSelected) {
-                    e.preventDefault();
-                    paintRemoveObject(paintSelected);
-                }
-                if (k === 'escape') togglePaintMode();
-                return;
-            }
             if (CAMERA_KEYS.includes(k)) handleCameraInput(k);
             else if (MOVEMENT_KEYS.includes(k)) handleMovementInput(k);
         });
@@ -2007,12 +1988,224 @@
             actionFeed.classList.remove('visible');
         }
 
+        // ── Modal Room ──
+        function setupModalGrid(players) {
+            // players: array of {player_id, name, status}
+            const activePlayers = players.filter(p => p.status === 'active' || p.status === 'initializing');
+            const count = Math.max(activePlayers.length, 1);
+            const container = document.querySelector('.video-container');
+
+            // Remove existing worlds grid content (solo mode)
+            worldsGrid.style.display = 'none';
+
+            // Create or update modal grid
+            let grid = container.querySelector('.modal-player-grid');
+            if (!grid) {
+                grid = document.createElement('div');
+                grid.className = 'modal-player-grid';
+                container.appendChild(grid);
+            }
+
+            // Update grid class for layout
+            grid.className = 'modal-player-grid players-' + Math.min(count, 8);
+
+            // Track which players we already have cells for
+            const existingIds = new Set(Object.keys(modalPlayerCells));
+            const newIds = new Set(activePlayers.map(p => p.player_id));
+
+            // Remove cells for players that left
+            for (const pid of existingIds) {
+                if (!newIds.has(pid)) {
+                    const cellInfo = modalPlayerCells[pid];
+                    if (cellInfo.cell.parentElement) cellInfo.cell.remove();
+                    delete modalPlayerCells[pid];
+                }
+            }
+
+            // Add cells for new players
+            for (const p of activePlayers) {
+                if (!modalPlayerCells[p.player_id]) {
+                    const cell = document.createElement('div');
+                    cell.className = 'modal-player-cell';
+
+                    const c = document.createElement('canvas');
+                    c.width = 640;
+                    c.height = 352;
+                    cell.appendChild(c);
+
+                    const nameLabel = document.createElement('div');
+                    nameLabel.className = 'modal-player-name';
+                    nameLabel.textContent = p.name;
+                    cell.appendChild(nameLabel);
+
+                    if (p.status === 'initializing') {
+                        const waiting = document.createElement('div');
+                        waiting.className = 'modal-player-waiting';
+                        waiting.textContent = 'loading...';
+                        cell.appendChild(waiting);
+                    }
+
+                    const capOverlay = document.createElement('div');
+                    capOverlay.className = 'caption-overlay';
+                    const capSpan = document.createElement('span');
+                    capSpan.className = 'caption-text';
+                    capOverlay.appendChild(capSpan);
+                    cell.appendChild(capOverlay);
+
+                    grid.appendChild(cell);
+                    modalPlayerCells[p.player_id] = {
+                        canvas: c,
+                        ctx: c.getContext('2d'),
+                        captionEl: capSpan,
+                        nameEl: nameLabel,
+                        cell: cell,
+                    };
+                } else {
+                    // Update name/status
+                    const cellInfo = modalPlayerCells[p.player_id];
+                    cellInfo.nameEl.textContent = p.name;
+                    // Remove waiting indicator if now active
+                    if (p.status === 'active') {
+                        const waiting = cellInfo.cell.querySelector('.modal-player-waiting');
+                        if (waiting) waiting.remove();
+                    }
+                }
+            }
+
+            // Resize canvases to fit cells
+            resizeModalCanvases();
+        }
+
+        function resizeModalCanvases() {
+            for (const pid of Object.keys(modalPlayerCells)) {
+                const info = modalPlayerCells[pid];
+                const cell = info.cell;
+                if (!cell.parentElement) continue;
+                const cellWidth = cell.clientWidth;
+                const cellHeight = cell.clientHeight;
+                if (!cellWidth || !cellHeight) continue;
+                const aspectRatio = info.canvas.width / info.canvas.height;
+                let width, height;
+                if (cellWidth / cellHeight > aspectRatio) {
+                    height = cellHeight;
+                    width = height * aspectRatio;
+                } else {
+                    width = cellWidth;
+                    height = width / aspectRatio;
+                }
+                info.canvas.style.width = width + 'px';
+                info.canvas.style.height = height + 'px';
+            }
+        }
+
+        function displayModalPlayerFrame(playerId, b64) {
+            const info = modalPlayerCells[playerId];
+            if (!info) return;
+            // Remove waiting indicator on first frame
+            const waiting = info.cell.querySelector('.modal-player-waiting');
+            if (waiting) waiting.remove();
+            const img = new Image();
+            img.onload = () => {
+                info.ctx.drawImage(img, 0, 0, info.canvas.width, info.canvas.height);
+            };
+            img.src = 'data:image/jpeg;base64,' + b64;
+        }
+
+        function showModalPlayerCaption(playerId, text, color) {
+            const info = modalPlayerCells[playerId];
+            if (!info || !info.captionEl) return;
+            const capEl = info.captionEl;
+            const timerId = 'modal_' + playerId;
+
+            clearTimeout(captionFadeTimers[timerId]);
+            clearInterval(captionTypeTimers[timerId]);
+            capEl.textContent = '';
+            capEl.style.color = color || '#e0e0e0';
+            capEl.style.textShadow = `0 0 8px ${color || '#e0e0e0'}40, 0 1px 3px rgba(0,0,0,0.9)`;
+            capEl.className = 'caption-text visible';
+
+            let charIdx = 0;
+            const typeCursor = document.createElement('span');
+            typeCursor.className = 'caption-cursor';
+            typeCursor.style.background = color || 'var(--accent)';
+            capEl.appendChild(typeCursor);
+
+            captionTypeTimers[timerId] = setInterval(() => {
+                if (charIdx < text.length) {
+                    typeCursor.remove();
+                    capEl.insertAdjacentText('beforeend', text[charIdx]);
+                    capEl.appendChild(typeCursor);
+                    charIdx++;
+                } else {
+                    clearInterval(captionTypeTimers[timerId]);
+                    typeCursor.remove();
+                    captionFadeTimers[timerId] = setTimeout(() => {
+                        capEl.className = 'caption-text fading';
+                    }, 4000);
+                }
+            }, 35);
+        }
+
+        function resetModalRoomUI() {
+            modalRoomOpen = false;
+            modalRoomBtn.textContent = '> Modal Room';
+            modalRoomBtn.classList.remove('active');
+            modalRoomPanel.classList.remove('visible');
+            modalRoomQr.innerHTML = '';
+            modalRoomUrl.textContent = '';
+            modalRoomPlayers.textContent = '0 / 8 players';
+            // Clear modal grid
+            const container = document.querySelector('.video-container');
+            const grid = container.querySelector('.modal-player-grid');
+            if (grid) grid.remove();
+            modalPlayerCells = {};
+            // Restore worlds grid for solo mode
+            worldsGrid.style.display = '';
+            // Clean up caption timers
+            for (const key of Object.keys(captionFadeTimers)) {
+                if (key.startsWith('modal_')) {
+                    clearTimeout(captionFadeTimers[key]);
+                    delete captionFadeTimers[key];
+                }
+            }
+            for (const key of Object.keys(captionTypeTimers)) {
+                if (key.startsWith('modal_')) {
+                    clearInterval(captionTypeTimers[key]);
+                    delete captionTypeTimers[key];
+                }
+            }
+        }
+
+        modalRoomBtn.addEventListener('click', () => {
+            if (ws?.readyState !== WebSocket.OPEN) return;
+            if (!modalRoomOpen) {
+                // Need a seed image
+                const isUpload = document.querySelector('[data-tab="upload"]').classList.contains('active');
+                const image = isUpload ? (uploadedImageData || null) : imageSelect.value;
+                if (!image) {
+                    inputDisplay.textContent = '> select a seed image first';
+                    return;
+                }
+                // Send open_modal_room with the image
+                const msg = { type: 'open_modal_room', mode: 'universal' };
+                if (isUpload && uploadedImageData) {
+                    // data:image/...;base64,XXX → strip prefix
+                    msg.image = uploadedImageData;
+                } else {
+                    // Server-side image path — server will load and encode it
+                    msg.seed_image_b64 = '';
+                    msg.image = image;
+                }
+                ws.send(JSON.stringify(msg));
+            } else {
+                ws.send(JSON.stringify({ type: 'close_modal_room' }));
+            }
+        });
+
         startBtn.addEventListener('click', async () => {
             if (ws?.readyState === WebSocket.OPEN) {
                 isRunning = true; startBtn.disabled = true; stopBtn.disabled = false;
                 resetInputState();
-                if (paintMode) togglePaintMode();
-                paintToggle.style.display = 'block';
                 bgMusic.pause(); bgMusic.src = '';
                 pendingMusicUrls = null;
                 musicBar.style.display = 'none';
@@ -2271,19 +2464,13 @@
                 }
                 wc.canvas.style.width = width + 'px';
                 wc.canvas.style.height = height + 'px';
-
-                // Keep paint layer sized to match world 0's canvas
-                if (paintLayer && wc === worldCanvases[0]) {
-                    paintLayer.style.width = width + 'px';
-                    paintLayer.style.height = height + 'px';
-                }
             });
         }
 
         // Backward compat alias
         function resizeCanvas() { resizeCanvases(); }
 
-        window.addEventListener('resize', resizeCanvases);
+        window.addEventListener('resize', () => { resizeCanvases(); resizeModalCanvases(); });
         resizeCanvases();
 
         // ── Fullscreen ──
@@ -2312,296 +2499,8 @@
         document.addEventListener('fullscreenchange', () => {
             fullscreenBtn.textContent = document.fullscreenElement ? '\u2715' : '\u26F6';
             resizeCanvases();
+            resizeModalCanvases();
         });
-
-        // ── Paint System (image paste + move/resize) ──
-        function initPaintLayer() {
-            const cell = worldCanvases[0].canvas.parentElement;
-            if (!cell) { console.warn('[paint] initPaintLayer: no cell for world 0'); return; }
-
-            if (paintLayer) { paintLayer.remove(); paintLayer = null; }
-            paintObjects.forEach(o => o.el.remove());
-            paintObjects = [];
-            paintSelected = null;
-
-            paintLayer = document.createElement('div');
-            paintLayer.className = 'paint-layer';
-            paintLayer.id = 'paintLayer';
-            cell.appendChild(paintLayer);
-
-            // Match video canvas size
-            const vc = worldCanvases[0].canvas;
-            paintLayer.style.width = vc.style.width;
-            paintLayer.style.height = vc.style.height;
-            console.log('[paint] initPaintLayer: created', paintLayer.style.width, 'x', paintLayer.style.height);
-
-            // Click on empty area deselects
-            paintLayer.addEventListener('mousedown', () => paintDeselectAll());
-
-            // Drag-drop images onto paint layer
-            paintLayer.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
-            paintLayer.addEventListener('drop', (e) => {
-                e.preventDefault();
-                const file = e.dataTransfer.files[0];
-                if (file && file.type.startsWith('image/')) {
-                    const url = URL.createObjectURL(file);
-                    const pos = paintGetPos(e);
-                    console.log('[paint] drop: image at', pos.x, pos.y);
-                    paintAddImage(url, pos.x, pos.y);
-                }
-            });
-        }
-
-        function togglePaintMode() {
-            paintMode = !paintMode;
-            paintToggle.classList.toggle('active', paintMode);
-            console.log('[paint] togglePaintMode:', paintMode);
-
-            if (paintMode) {
-                if (!paintLayer) initPaintLayer();
-                paintLayer.classList.add('active');
-                paintToolbar.classList.add('visible');
-            } else {
-                if (paintLayer) paintLayer.classList.remove('active');
-                paintToolbar.classList.remove('visible');
-                paintDeselectAll();
-            }
-        }
-
-        paintToggle.addEventListener('click', () => { if (isRunning) togglePaintMode(); });
-
-        function paintGetPos(e) {
-            if (!paintLayer) return { x: 0, y: 0 };
-            const rect = paintLayer.getBoundingClientRect();
-            return {
-                x: (e.clientX - rect.left) * (canvas.width / rect.width),
-                y: (e.clientY - rect.top) * (canvas.height / rect.height),
-            };
-        }
-
-        // ── Paste images ──
-        document.addEventListener('paste', (e) => {
-            if (!paintMode) return;
-            console.log('[paint] paste event, items:', e.clipboardData?.items?.length);
-            for (const item of e.clipboardData?.items || []) {
-                if (item.type.startsWith('image/')) {
-                    e.preventDefault();
-                    const blob = item.getAsFile();
-                    const url = URL.createObjectURL(blob);
-                    console.log('[paint] paste: image blob', blob.size, 'bytes');
-                    paintAddImage(url);
-                    break;
-                }
-            }
-        });
-
-        function paintAddImage(src, dropX, dropY) {
-            if (!paintLayer) { console.warn('[paint] paintAddImage: no paintLayer'); return; }
-            console.log('[paint] paintAddImage: loading', src.substring(0, 60) + '...');
-
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.onerror = (err) => console.error('[paint] paintAddImage: image load failed', err);
-            img.onload = () => {
-                let w = img.width, h = img.height;
-                const cw = canvas.width, ch = canvas.height;
-                console.log('[paint] image loaded:', w, 'x', h, '→ canvas:', cw, 'x', ch);
-                const maxW = cw * 0.35, maxH = ch * 0.45;
-                if (w > maxW) { h *= maxW / w; w = maxW; }
-                if (h > maxH) { w *= maxH / h; h = maxH; }
-                w = Math.round(w);
-                h = Math.round(h);
-
-                const x = dropX !== undefined ? dropX - w / 2 : (cw - w) / 2;
-                const y = dropY !== undefined ? dropY - h / 2 : (ch - h) / 2;
-
-                const el = document.createElement('div');
-                el.className = 'paint-pasted-object selected';
-                el.style.left = (x / cw * 100) + '%';
-                el.style.top = (y / ch * 100) + '%';
-                el.style.width = (w / cw * 100) + '%';
-                el.style.height = (h / ch * 100) + '%';
-
-                const imgEl = document.createElement('img');
-                imgEl.src = src;
-                el.appendChild(imgEl);
-
-                ['tl','tr','bl','br'].forEach(pos => {
-                    const handle = document.createElement('div');
-                    handle.className = `paint-resize-handle ${pos}`;
-                    handle.dataset.handle = pos;
-                    el.appendChild(handle);
-                });
-
-                const del = document.createElement('div');
-                del.className = 'paint-delete-handle';
-                del.textContent = '\u00d7';
-                del.addEventListener('click', (ev) => {
-                    ev.stopPropagation();
-                    paintRemoveObject(obj);
-                });
-                el.appendChild(del);
-
-                paintLayer.appendChild(el);
-
-                const obj = { el, x, y, w, h, imgSrc: src };
-                paintObjects.push(obj);
-                console.log('[paint] object added, total:', paintObjects.length, 'pos:', Math.round(x), Math.round(y), 'size:', w, 'x', h);
-                paintSelectObject(obj);
-
-                // Drag to move
-                el.addEventListener('mousedown', (ev) => {
-                    if (ev.target.classList.contains('paint-resize-handle')) return;
-                    if (ev.target.classList.contains('paint-delete-handle')) return;
-                    ev.stopPropagation();
-                    paintSelectObject(obj);
-                    paintDragState = {
-                        type: 'move',
-                        startX: ev.clientX, startY: ev.clientY,
-                        origX: obj.x, origY: obj.y,
-                    };
-                });
-
-                el.querySelectorAll('.paint-resize-handle').forEach(handle => {
-                    handle.addEventListener('mousedown', (ev) => {
-                        ev.stopPropagation();
-                        paintSelectObject(obj);
-                        paintDragState = {
-                            type: 'resize',
-                            handle: handle.dataset.handle,
-                            startX: ev.clientX, startY: ev.clientY,
-                            origX: obj.x, origY: obj.y,
-                            origW: obj.w, origH: obj.h,
-                        };
-                    });
-                });
-            };
-            img.src = src;
-        }
-
-        function paintSelectObject(obj) {
-            paintDeselectAll();
-            paintSelected = obj;
-            obj.el.classList.add('selected');
-        }
-
-        function paintDeselectAll() {
-            paintSelected = null;
-            paintObjects.forEach(o => o.el.classList.remove('selected'));
-        }
-
-        function paintRemoveObject(obj) {
-            obj.el.remove();
-            paintObjects = paintObjects.filter(o => o !== obj);
-            if (paintSelected === obj) paintSelected = null;
-            console.log('[paint] removed object, remaining:', paintObjects.length);
-        }
-
-        // Global mouse move/up for paint object drag/resize
-        document.addEventListener('mousemove', (e) => {
-            if (!paintDragState || !paintSelected || !paintLayer) return;
-            const dx = e.clientX - paintDragState.startX;
-            const dy = e.clientY - paintDragState.startY;
-            const obj = paintSelected;
-            const rect = paintLayer.getBoundingClientRect();
-            const scaleX = canvas.width / rect.width;
-            const scaleY = canvas.height / rect.height;
-            const cw = canvas.width, ch = canvas.height;
-
-            if (paintDragState.type === 'move') {
-                obj.x = paintDragState.origX + dx * scaleX;
-                obj.y = paintDragState.origY + dy * scaleY;
-                obj.el.style.left = (obj.x / cw * 100) + '%';
-                obj.el.style.top = (obj.y / ch * 100) + '%';
-            } else if (paintDragState.type === 'resize') {
-                const sdx = dx * scaleX;
-                const sdy = dy * scaleY;
-                let { origX, origY, origW, origH, handle } = paintDragState;
-                let newX = origX, newY = origY, newW = origW, newH = origH;
-
-                if (handle.includes('r')) { newW = Math.max(20, origW + sdx); }
-                if (handle.includes('l')) { newW = Math.max(20, origW - sdx); newX = origX + sdx; }
-                if (handle.includes('b')) { newH = Math.max(20, origH + sdy); }
-                if (handle.includes('t')) { newH = Math.max(20, origH - sdy); newY = origY + sdy; }
-
-                obj.x = newX; obj.y = newY; obj.w = newW; obj.h = newH;
-                obj.el.style.left = (newX / cw * 100) + '%';
-                obj.el.style.top = (newY / ch * 100) + '%';
-                obj.el.style.width = (newW / cw * 100) + '%';
-                obj.el.style.height = (newH / ch * 100) + '%';
-            }
-        });
-
-        document.addEventListener('mouseup', () => { paintDragState = null; });
-
-        // ── Apply: composite pasted objects onto current frame ──
-        document.getElementById('paintApplyBtn').addEventListener('click', paintApply);
-
-        function paintApply() {
-            console.log('[paint] apply: paintLayer=', !!paintLayer, 'canvas=', !!canvas, 'objects=', paintObjects.length);
-            if (!paintLayer || !canvas) { console.warn('[paint] apply: no paintLayer or canvas'); return; }
-            if (paintObjects.length === 0) { console.warn('[paint] apply: no objects to composite'); return; }
-            const cw = canvas.width, ch = canvas.height;
-
-            const composite = document.createElement('canvas');
-            composite.width = cw;
-            composite.height = ch;
-            const cCtx = composite.getContext('2d');
-
-            // 1. Current frame
-            cCtx.drawImage(canvas, 0, 0);
-
-            // 2. Pasted objects
-            const objCount = paintObjects.length;
-            const loadPromises = paintObjects.map((obj, i) => {
-                return new Promise(resolve => {
-                    const img = new Image();
-                    img.crossOrigin = 'anonymous';
-                    img.onload = () => {
-                        console.log('[paint] apply: drawing object', i + 1, '/', objCount, 'at', Math.round(obj.x), Math.round(obj.y), obj.w, 'x', obj.h);
-                        cCtx.drawImage(img, obj.x, obj.y, obj.w, obj.h);
-                        resolve();
-                    };
-                    img.onerror = (err) => { console.error('[paint] apply: object', i, 'image load failed', err); resolve(); };
-                    img.src = obj.imgSrc;
-                });
-            });
-
-            Promise.all(loadPromises).then(() => {
-                // Render composite to display canvas
-                ctx.clearRect(0, 0, cw, ch);
-                ctx.drawImage(composite, 0, 0);
-
-                // Record composited frame for timelapse
-                const paintedB64 = composite.toDataURL('image/jpeg', 0.9).split(',')[1];
-                const lastBlock = recordedFrames.length > 0 ?
-                    recordedFrames[recordedFrames.length - 1].block : 0;
-                recordedFrames.push({
-                    b64: paintedB64,
-                    block: lastBlock,
-                    worldId: 0,
-                    keyboard: 'q',
-                    mouse: 'u',
-                    caption: activeCaptionText,
-                    captionColor: activeCaptionColor,
-                });
-                console.log('[paint] apply: composited', objCount, 'objects, recorded frame', recordedFrames.length);
-
-                // Clear objects
-                paintObjects.forEach(o => o.el.remove());
-                paintObjects = [];
-                paintSelected = null;
-
-                // Exit paint mode so keyboard actions resume
-                togglePaintMode();
-
-                // Flash
-                const flash = document.createElement('div');
-                flash.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,212,170,0.15);z-index:9;pointer-events:none;';
-                if (paintLayer) paintLayer.appendChild(flash);
-                setTimeout(() => flash.remove(), 200);
-            });
-        }
 
         loadImages();
         connect();

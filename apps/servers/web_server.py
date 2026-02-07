@@ -2128,52 +2128,6 @@ async def websocket_endpoint(websocket: WebSocket):
                         await w.action_queue.put(None)
                     await websocket.send_json({"type": "stopped"})
 
-            elif msg_type == "restart_with_frame":
-                frame_data = data.get("data")
-                if inference_engine and frame_data:
-                    logger.info("[WS %s] Restart with painted frame requested (%d KB)",
-                                client_label, len(frame_data) // 1024)
-                    # Stop current inference if running
-                    if inference_engine.is_running:
-                        inference_engine.stop()
-                        for w in inference_engine.worlds:
-                            await w.action_queue.put(None)
-                        # Wait for inference to fully stop
-                        wait_start = _time.perf_counter()
-                        while inference_engine.is_running:
-                            await asyncio.sleep(0.05)
-                            if _time.perf_counter() - wait_start > 10:
-                                logger.error("[WS %s] Timeout waiting for inference to stop", client_label)
-                                await websocket.send_json({"type": "error", "message": "Restart timeout"})
-                                break
-                        else:
-                            logger.info("[WS %s] Old inference stopped, restarting with painted frame", client_label)
-                            img_input = f"data:image/jpeg;base64,{frame_data}"
-                            try:
-                                asyncio.create_task(
-                                    inference_engine.run_inference(img_input, websocket))
-                            except Exception as e:
-                                logger.exception("[WS %s] Failed to restart inference", client_label)
-                                await websocket.send_json({
-                                    "type": "error",
-                                    "message": f"Restart failed: {str(e)}"
-                                })
-                    else:
-                        # Not running — just start fresh with the frame
-                        logger.info("[WS %s] Not running, starting fresh with painted frame", client_label)
-                        img_input = f"data:image/jpeg;base64,{frame_data}"
-                        try:
-                            asyncio.create_task(
-                                inference_engine.run_inference(img_input, websocket))
-                        except Exception as e:
-                            logger.exception("[WS %s] Failed to start inference with painted frame", client_label)
-                            await websocket.send_json({
-                                "type": "error",
-                                "message": f"Start failed: {str(e)}"
-                            })
-                else:
-                    logger.warning("[WS %s] restart_with_frame: missing engine or frame data", client_label)
-
             else:
                 logger.warning("[WS %s] Unknown message type=%s", client_label, msg_type)
 
