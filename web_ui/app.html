@@ -138,6 +138,49 @@
             min-height: 0; /* Allow flex shrinking */
         }
 
+        /* Multi-world grid */
+        .worlds-grid {
+            display: grid;
+            width: 100%;
+            height: 100%;
+            gap: 2px;
+        }
+
+        .worlds-grid.worlds-1 { grid-template-columns: 1fr; }
+        .worlds-grid.worlds-2 { grid-template-columns: 1fr 1fr; }
+        .worlds-grid.worlds-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+
+        .world-cell {
+            position: relative;
+            background: #000;
+            overflow: hidden;
+        }
+
+        .world-cell.active {
+            border: 1px solid var(--accent);
+        }
+
+        .world-label {
+            position: absolute;
+            top: 6px;
+            left: 8px;
+            font-size: 8px;
+            color: var(--text-dim);
+            z-index: 2;
+            pointer-events: none;
+        }
+
+        .world-cell canvas {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            max-width: 100%;
+            max-height: 100%;
+            image-rendering: pixelated;
+        }
+
+        /* Legacy single canvas (used before setupWorlds is called) */
         #videoCanvas {
             position: absolute;
             top: 50%;
@@ -913,7 +956,11 @@
 
         <div class="video-section">
             <div class="video-container">
-                <canvas id="videoCanvas" width="640" height="352"></canvas>
+                <div class="worlds-grid worlds-1" id="worldsGrid">
+                    <div class="world-cell active">
+                        <canvas id="videoCanvas" width="640" height="352"></canvas>
+                    </div>
+                </div>
                 <div class="caption-overlay">
                     <span class="caption-text" id="captionText"></span>
                 </div>
@@ -1074,8 +1121,11 @@
     <audio id="bgMusic" loop preload="none"></audio>
 
     <script>
-        const canvas = document.getElementById('videoCanvas');
-        const ctx = canvas.getContext('2d');
+        let canvas = document.getElementById('videoCanvas');
+        let ctx = canvas.getContext('2d');
+        const worldsGrid = document.getElementById('worldsGrid');
+        let worldCanvases = [{canvas, ctx}];  // array of {canvas, ctx} per world
+        let numWorlds = 1;
         const statusDot = document.getElementById('statusDot');
         const statusText = document.getElementById('statusText');
         const blockNum = document.getElementById('blockNum');
@@ -1118,6 +1168,33 @@
         const roomUrl = document.getElementById('roomUrl');
         const roomPlayers = document.getElementById('roomPlayers');
         const actionFeed = document.getElementById('actionFeed');
+
+        function setupWorlds(n) {
+            numWorlds = n;
+            worldsGrid.innerHTML = '';
+            worldsGrid.className = `worlds-grid worlds-${n}`;
+            worldCanvases = [];
+            for (let i = 0; i < n; i++) {
+                const cell = document.createElement('div');
+                cell.className = 'world-cell' + (i === 0 ? ' active' : '');
+                const c = document.createElement('canvas');
+                c.width = canvas.width;
+                c.height = canvas.height;
+                cell.appendChild(c);
+                if (n > 1) {
+                    const label = document.createElement('div');
+                    label.className = 'world-label';
+                    label.textContent = `World ${i + 1}`;
+                    cell.appendChild(label);
+                }
+                worldsGrid.appendChild(cell);
+                worldCanvases.push({canvas: c, ctx: c.getContext('2d')});
+            }
+            // Update primary canvas/ctx references to world 0
+            canvas = worldCanvases[0].canvas;
+            ctx = worldCanvases[0].ctx;
+            resizeCanvases();
+        }
 
         let roomOpen = false;
         let captionFadeTimer = null;
@@ -1420,10 +1497,16 @@
 
         function handleMessage(msg) {
             switch (msg.type) {
-                case 'frame': displayFrame(msg.data, msg.block); blockNum.textContent = msg.block; break;
+                case 'frame': displayFrame(msg.data, msg.block, msg.world_id || 0); blockNum.textContent = msg.block; break;
                 case 'ready':
                     setStatus('Ready', 'waiting');
-                    if (msg.resolution) document.getElementById('resDisplay').textContent = msg.resolution;
+                    if (msg.num_worlds && msg.num_worlds > 1) setupWorlds(msg.num_worlds);
+                    if (msg.resolution) {
+                        document.getElementById('resDisplay').textContent = msg.resolution;
+                        const [w, h] = msg.resolution.split('x').map(Number);
+                        worldCanvases.forEach(wc => { wc.canvas.width = w; wc.canvas.height = h; });
+                        resizeCanvases();
+                    }
                     break;
                 case 'request_action': setStatus(`Block ${msg.block}`, 'waiting'); startInputSequence(); break;
                 case 'block_complete': setStatus(`Block ${msg.block} done`, 'connected'); resetInputState(); break;
@@ -1433,7 +1516,9 @@
                     break;
                 case 'image_preview': {
                     const previewImage = new Image();
-                    previewImage.onload = () => ctx.drawImage(previewImage, 0, 0, canvas.width, canvas.height);
+                    previewImage.onload = () => {
+                        worldCanvases.forEach(wc => wc.ctx.drawImage(previewImage, 0, 0, wc.canvas.width, wc.canvas.height));
+                    };
                     previewImage.src = 'data:image/jpeg;base64,' + msg.data;
                     inputDisplay.textContent = '> image generated, starting inference...';
                     setStatus('Encoding...', 'waiting');
@@ -1540,18 +1625,22 @@
             }
         }
 
-        function displayFrame(b64, block) {
+        function displayFrame(b64, block, worldId) {
+            const wc = worldCanvases[worldId] || worldCanvases[0];
             const img = new Image();
             img.onload = () => {
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                recordedFrames.push({
-                    b64,
-                    block,
-                    keyboard: lastSentKeyboard,
-                    mouse: lastSentMouse,
-                    caption: activeCaptionText,
-                    captionColor: activeCaptionColor,
-                });
+                wc.ctx.drawImage(img, 0, 0, wc.canvas.width, wc.canvas.height);
+                // Only record frames from world 0 for timelapse
+                if (worldId === 0) {
+                    recordedFrames.push({
+                        b64,
+                        block,
+                        keyboard: lastSentKeyboard,
+                        mouse: lastSentMouse,
+                        caption: activeCaptionText,
+                        captionColor: activeCaptionColor,
+                    });
+                }
             };
             img.src = 'data:image/jpeg;base64,' + b64;
         }
@@ -1629,6 +1718,7 @@
                 recordedFrames = [];
                 exportBtn.style.display = 'none';
                 exportBar.style.display = 'none';
+                setupWorlds(1);  // reset to single world; server will send num_worlds in ready
 
                 const prompt = promptInput.value.trim();
                 const isUpload = document.querySelector('[data-tab="upload"]').classList.contains('active');
@@ -1796,30 +1886,33 @@
             exportBtn.disabled = false;
         }
 
-        // Resize canvas to fill container while maintaining aspect ratio
-        function resizeCanvas() {
-            const container = document.querySelector('.video-container');
-            const containerWidth = container.clientWidth;
-            const containerHeight = container.clientHeight;
-            const aspectRatio = 640 / 352;
+        // Resize all world canvases to fill their grid cells
+        function resizeCanvases() {
+            worldCanvases.forEach(wc => {
+                const cell = wc.canvas.parentElement;
+                if (!cell) return;
+                const cellWidth = cell.clientWidth;
+                const cellHeight = cell.clientHeight;
+                const aspectRatio = wc.canvas.width / wc.canvas.height;
 
-            let width, height;
-            if (containerWidth / containerHeight > aspectRatio) {
-                // Container is wider than video aspect ratio
-                height = containerHeight;
-                width = height * aspectRatio;
-            } else {
-                // Container is taller than video aspect ratio
-                width = containerWidth;
-                height = width / aspectRatio;
-            }
-
-            canvas.style.width = width + 'px';
-            canvas.style.height = height + 'px';
+                let width, height;
+                if (cellWidth / cellHeight > aspectRatio) {
+                    height = cellHeight;
+                    width = height * aspectRatio;
+                } else {
+                    width = cellWidth;
+                    height = width / aspectRatio;
+                }
+                wc.canvas.style.width = width + 'px';
+                wc.canvas.style.height = height + 'px';
+            });
         }
 
-        window.addEventListener('resize', resizeCanvas);
-        resizeCanvas();
+        // Backward compat alias
+        function resizeCanvas() { resizeCanvases(); }
+
+        window.addEventListener('resize', resizeCanvases);
+        resizeCanvases();
 
         // ── Fullscreen ──
         function toggleFullscreen() {
@@ -1843,7 +1936,7 @@
 
         document.addEventListener('fullscreenchange', () => {
             fullscreenBtn.textContent = document.fullscreenElement ? '\u2715' : '\u26F6';
-            resizeCanvas();
+            resizeCanvases();
         });
 
         loadImages();

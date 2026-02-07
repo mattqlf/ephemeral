@@ -224,6 +224,58 @@
             font-size: 10px;
             color: var(--text-muted);
         }
+
+        /* World selection overlay */
+        .world-select-overlay {
+            position: fixed;
+            inset: 0;
+            background: var(--bg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 16px;
+            z-index: 100;
+        }
+
+        .world-select-overlay.hidden {
+            display: none;
+        }
+
+        .world-buttons {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            padding: 0 20px;
+        }
+
+        .world-btn {
+            padding: 16px 24px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            border: 1px solid var(--border-light);
+            background: transparent;
+            color: var(--text);
+            cursor: pointer;
+            transition: all 0.15s;
+            text-align: center;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .world-btn:active, .world-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .world-btn-sub {
+            display: block;
+            font-size: 8px;
+            color: var(--text-dim);
+            margin-top: 4px;
+            letter-spacing: 0.05em;
+        }
     </style>
 </head>
 <body>
@@ -231,6 +283,11 @@
         <div class="name-title">Enter your name</div>
         <input type="text" class="name-input" id="nameInput" placeholder="Player" maxlength="16" autocomplete="off" />
         <button class="name-go-btn" id="nameGoBtn">> Join</button>
+    </div>
+
+    <div class="world-select-overlay hidden" id="worldSelectOverlay">
+        <div class="name-title">Select Your World</div>
+        <div class="world-buttons" id="worldButtons"></div>
     </div>
 
     <header>
@@ -287,6 +344,8 @@
         const nameOverlay = document.getElementById('nameOverlay');
         const nameInput = document.getElementById('nameInput');
         const nameGoBtn = document.getElementById('nameGoBtn');
+        const worldSelectOverlay = document.getElementById('worldSelectOverlay');
+        const worldButtons = document.getElementById('worldButtons');
 
         // Extract room_id from URL path: /room/{room_id}
         const pathParts = location.pathname.split('/');
@@ -294,6 +353,7 @@
 
         let ws = null;
         let playerName = '';
+        let selectedWorldId = 0;
 
         // ── Name entry ──
         nameInput.addEventListener('keydown', (e) => {
@@ -347,8 +407,34 @@
                     case 'room_closed':
                         closedOverlay.classList.add('visible');
                         break;
+                    case 'select_world':
+                        showWorldSelection(msg.num_worlds);
+                        break;
                 }
             };
+        }
+
+        function showWorldSelection(numWorlds) {
+            worldButtons.innerHTML = '';
+            for (let i = 0; i < numWorlds; i++) {
+                const btn = document.createElement('button');
+                btn.className = 'world-btn';
+                btn.innerHTML = `World ${i + 1}` +
+                    (i === 0 ? '<span class="world-btn-sub">host world</span>' : '');
+                btn.addEventListener('click', () => {
+                    selectedWorldId = i;
+                    ws.send(JSON.stringify({ type: 'select_world', world_id: i }));
+                    worldSelectOverlay.classList.add('hidden');
+                });
+                btn.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    selectedWorldId = i;
+                    ws.send(JSON.stringify({ type: 'select_world', world_id: i }));
+                    worldSelectOverlay.classList.add('hidden');
+                }, { passive: false });
+                worldButtons.appendChild(btn);
+            }
+            worldSelectOverlay.classList.remove('hidden');
         }
 
         function sendVote(keyboard, mouse) {
