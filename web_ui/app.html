@@ -761,6 +761,88 @@
             opacity: 1;
         }
 
+        /* Per-world controls overlay (shown in fullscreen for multi-world) */
+        .world-controls {
+            display: none;
+        }
+
+        .video-container:fullscreen .world-controls {
+            display: flex;
+            position: absolute;
+            bottom: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            background: rgba(0, 0, 0, 0.35);
+            backdrop-filter: blur(6px);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 6px;
+            z-index: 10;
+            opacity: 0.4;
+            transition: opacity 0.3s;
+        }
+
+        .video-container:fullscreen .world-controls:hover {
+            opacity: 1;
+        }
+
+        .world-controls .key-grid {
+            gap: 1px;
+        }
+
+        .world-controls .key {
+            width: 22px;
+            height: 22px;
+            font-size: 8px;
+            background: rgba(21, 21, 21, 0.5);
+            border-color: rgba(51, 51, 51, 0.5);
+        }
+
+        .world-controls .key-hint {
+            display: none;
+        }
+
+        /* In multi-world fullscreen, hide the centered controls and show per-world ones */
+        .video-container:fullscreen .worlds-grid.worlds-2 ~ .fullscreen-controls,
+        .video-container:fullscreen .worlds-grid.worlds-4 ~ .fullscreen-controls {
+            display: none;
+        }
+
+        /* Floating stop/exit for multi-world fullscreen */
+        .fs-actions-float {
+            display: none;
+        }
+
+        .video-container:fullscreen .worlds-grid.worlds-2 ~ .fs-actions-float,
+        .video-container:fullscreen .worlds-grid.worlds-4 ~ .fs-actions-float {
+            display: flex;
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            gap: 4px;
+            z-index: 10;
+            opacity: 0.4;
+            transition: opacity 0.3s;
+        }
+
+        .video-container:fullscreen .fs-actions-float:hover {
+            opacity: 1;
+        }
+
+        /* Smaller captions in fullscreen multi-world */
+        .video-container:fullscreen .worlds-grid.worlds-2 .caption-text,
+        .video-container:fullscreen .worlds-grid.worlds-4 .caption-text {
+            font-size: 14px;
+        }
+
+        .video-container:fullscreen .worlds-grid.worlds-2 .caption-overlay,
+        .video-container:fullscreen .worlds-grid.worlds-4 .caption-overlay {
+            bottom: 60px;
+            padding: 0 20px;
+        }
+
         .fullscreen-controls .key-grid {
             gap: 2px;
         }
@@ -783,7 +865,8 @@
             gap: 3px;
         }
 
-        .fullscreen-controls .fs-btn {
+        .fullscreen-controls .fs-btn,
+        .fs-actions-float .fs-btn {
             padding: 5px 10px;
             font-family: 'Courier New', monospace;
             font-size: 8px;
@@ -797,7 +880,8 @@
             white-space: nowrap;
         }
 
-        .fullscreen-controls .fs-btn:hover {
+        .fullscreen-controls .fs-btn:hover,
+        .fs-actions-float .fs-btn:hover {
             border-color: var(--accent);
             color: var(--accent);
         }
@@ -1004,6 +1088,10 @@
                         <button class="fs-btn" id="fsExitBtn">Exit</button>
                     </div>
                 </div>
+                <div class="fs-actions-float">
+                    <button class="fs-btn" id="fsStopBtn2">Stop</button>
+                    <button class="fs-btn" id="fsExitBtn2">Exit</button>
+                </div>
             </div>
 
             <div class="image-bar">
@@ -1191,6 +1279,44 @@
                     label.className = 'world-label';
                     label.textContent = `World ${i + 1}`;
                     cell.appendChild(label);
+
+                    // Per-world fullscreen controls
+                    const wCtrl = document.createElement('div');
+                    wCtrl.className = 'world-controls';
+                    wCtrl.innerHTML = `
+                        <div class="key-grid">
+                            <div class="key empty"></div>
+                            <div class="key" data-key="i" data-type="camera"><span>I</span></div>
+                            <div class="key empty"></div>
+                            <div class="key" data-key="j" data-type="camera"><span>J</span></div>
+                            <div class="key" data-key="u" data-type="camera"><span>U</span></div>
+                            <div class="key" data-key="l" data-type="camera"><span>L</span></div>
+                            <div class="key empty"></div>
+                            <div class="key" data-key="k" data-type="camera"><span>K</span></div>
+                            <div class="key empty"></div>
+                        </div>
+                        <div class="key-grid">
+                            <div class="key empty"></div>
+                            <div class="key" data-key="w" data-type="movement"><span>W</span></div>
+                            <div class="key empty"></div>
+                            <div class="key" data-key="a" data-type="movement"><span>A</span></div>
+                            <div class="key" data-key="q" data-type="movement"><span>Q</span></div>
+                            <div class="key" data-key="d" data-type="movement"><span>D</span></div>
+                            <div class="key empty"></div>
+                            <div class="key" data-key="s" data-type="movement"><span>S</span></div>
+                            <div class="key empty"></div>
+                        </div>`;
+                    cell.appendChild(wCtrl);
+
+                    // Wire up click handlers on per-world keys
+                    wCtrl.querySelectorAll('.key').forEach(el => {
+                        el.addEventListener('click', () => {
+                            if (el.classList.contains('disabled') || el.classList.contains('empty')) return;
+                            const { key, type } = el.dataset;
+                            if (type === 'camera') handleCameraInput(key);
+                            else if (type === 'movement') handleMovementInput(key);
+                        });
+                    });
                 }
                 // Per-world caption overlay
                 const capOverlay = document.createElement('div');
@@ -1654,17 +1780,15 @@
             const img = new Image();
             img.onload = () => {
                 wc.ctx.drawImage(img, 0, 0, wc.canvas.width, wc.canvas.height);
-                // Only record frames from world 0 for timelapse
-                if (worldId === 0) {
-                    recordedFrames.push({
-                        b64,
-                        block,
-                        keyboard: lastSentKeyboard,
-                        mouse: lastSentMouse,
-                        caption: activeCaptionText,
-                        captionColor: activeCaptionColor,
-                    });
-                }
+                recordedFrames.push({
+                    b64,
+                    block,
+                    worldId,
+                    keyboard: lastSentKeyboard,
+                    mouse: lastSentMouse,
+                    caption: activeCaptionText,
+                    captionColor: activeCaptionColor,
+                });
             };
             img.src = 'data:image/jpeg;base64,' + b64;
         }
@@ -1820,16 +1944,27 @@
             exportLabel.textContent = 'timelapse: encoding...';
             exportProgress.style.width = '0%';
 
+            // Determine per-world resolution from the first frame's canvas
+            const frameW = worldCanvases[0].canvas.width;
+            const frameH = worldCanvases[0].canvas.height;
+
+            // Layout: 1 world = 1x1, 2 worlds = 2x1, 4 worlds = 2x2
+            const cols = numWorlds >= 2 ? 2 : 1;
+            const rows = numWorlds >= 4 ? 2 : 1;
+            const gap = numWorlds > 1 ? 2 : 0;
+            const exportW = cols * frameW + (cols - 1) * gap;
+            const exportH = rows * frameH + (rows - 1) * gap;
+
             const fps = 25;
             const exportCanvas = document.createElement('canvas');
-            exportCanvas.width = 640;
-            exportCanvas.height = 352;
+            exportCanvas.width = exportW;
+            exportCanvas.height = exportH;
             const exportCtx = exportCanvas.getContext('2d');
 
-            const stream = exportCanvas.captureStream(0); // manual frame push
+            const stream = exportCanvas.captureStream(0);
             const recorder = new MediaRecorder(stream, {
                 mimeType: 'video/webm;codecs=vp9',
-                videoBitsPerSecond: 4_000_000,
+                videoBitsPerSecond: numWorlds > 1 ? 8_000_000 : 4_000_000,
             });
 
             const chunks = [];
@@ -1838,64 +1973,104 @@
             const done = new Promise((resolve) => { recorder.onstop = resolve; });
             recorder.start();
 
-            const total = recordedFrames.length;
+            // Group frames by block+frame index so multi-world frames render together
+            // Each "tick" is a set of frames (one per world) with the same block
+            const ticks = [];
+            let currentTick = null;
+            for (const frame of recordedFrames) {
+                const key = `${frame.block}`;
+                if (!currentTick || currentTick.key !== key || currentTick.frames.has(frame.worldId)) {
+                    currentTick = { key, frames: new Map() };
+                    ticks.push(currentTick);
+                }
+                currentTick.frames.set(frame.worldId, frame);
+            }
+
+            const total = ticks.length;
             for (let i = 0; i < total; i++) {
-                const frame = recordedFrames[i];
-                const img = new Image();
-                await new Promise((resolve) => {
-                    img.onload = resolve;
-                    img.src = 'data:image/jpeg;base64,' + frame.b64;
-                });
-                exportCtx.drawImage(img, 0, 0, 640, 352);
-
-                // ── Action badge (bottom-left) ──
-                const kb = frame.keyboard || 'q';
-                const ms = frame.mouse || 'u';
-                if (kb !== 'q' || ms !== 'u') {
-                    const kbLabel = KEY_LABELS[kb] || kb.toUpperCase();
-                    const msLabel = KEY_LABELS[ms] || ms.toUpperCase();
-                    let badgeText;
-                    if (kbLabel !== '-' && msLabel !== '-') badgeText = `${kbLabel} + ${msLabel}`;
-                    else if (kbLabel !== '-') badgeText = kbLabel;
-                    else badgeText = msLabel;
-
-                    exportCtx.font = '14px "Courier New", monospace';
-                    const textW = exportCtx.measureText(badgeText).width;
-                    const padX = 8, padY = 4, radius = 4;
-                    const bx = 10, by = 352 - 10 - (14 + padY * 2);
-                    const bw = textW + padX * 2, bh = 14 + padY * 2;
-
-                    exportCtx.fillStyle = 'rgba(0,0,0,0.6)';
-                    exportCtx.beginPath();
-                    exportCtx.roundRect(bx, by, bw, bh, radius);
-                    exportCtx.fill();
-
-                    exportCtx.fillStyle = '#ffffff';
-                    exportCtx.textBaseline = 'middle';
-                    exportCtx.textAlign = 'left';
-                    exportCtx.fillText(badgeText, bx + padX, by + bh / 2);
+                const tick = ticks[i];
+                // Black background for gap between worlds
+                if (numWorlds > 1) {
+                    exportCtx.fillStyle = '#000';
+                    exportCtx.fillRect(0, 0, exportW, exportH);
                 }
 
-                // ── Caption text (bottom-center) ──
-                if (frame.caption) {
-                    exportCtx.font = '14px "Courier New", monospace';
-                    exportCtx.textAlign = 'center';
-                    exportCtx.textBaseline = 'alphabetic';
-                    const cx = 320, cy = 352 - 30;
+                // Draw each world into its grid slot
+                for (let wId = 0; wId < numWorlds; wId++) {
+                    const frame = tick.frames.get(wId);
+                    if (!frame) continue;
 
-                    exportCtx.strokeStyle = '#000000';
-                    exportCtx.lineWidth = 3;
-                    exportCtx.lineJoin = 'round';
-                    exportCtx.strokeText(frame.caption, cx, cy);
+                    const col = wId % cols;
+                    const row = Math.floor(wId / cols);
+                    const ox = col * (frameW + gap);
+                    const oy = row * (frameH + gap);
 
-                    exportCtx.fillStyle = frame.captionColor || '#e0e0e0';
-                    exportCtx.fillText(frame.caption, cx, cy);
+                    const img = new Image();
+                    await new Promise((resolve) => {
+                        img.onload = resolve;
+                        img.src = 'data:image/jpeg;base64,' + frame.b64;
+                    });
+                    exportCtx.drawImage(img, ox, oy, frameW, frameH);
+
+                    // ── Action badge (bottom-left of this world's slot) ──
+                    const kb = frame.keyboard || 'q';
+                    const ms = frame.mouse || 'u';
+                    if (kb !== 'q' || ms !== 'u') {
+                        const kbLabel = KEY_LABELS[kb] || kb.toUpperCase();
+                        const msLabel = KEY_LABELS[ms] || ms.toUpperCase();
+                        let badgeText;
+                        if (kbLabel !== '-' && msLabel !== '-') badgeText = `${kbLabel} + ${msLabel}`;
+                        else if (kbLabel !== '-') badgeText = kbLabel;
+                        else badgeText = msLabel;
+
+                        const fontSize = numWorlds > 1 ? 11 : 14;
+                        exportCtx.font = `${fontSize}px "Courier New", monospace`;
+                        const textWidth = exportCtx.measureText(badgeText).width;
+                        const padX = 6, padY = 3, radius = 3;
+                        const bx = ox + 8, by = oy + frameH - 8 - (fontSize + padY * 2);
+                        const bw = textWidth + padX * 2, bh = fontSize + padY * 2;
+
+                        exportCtx.fillStyle = 'rgba(0,0,0,0.6)';
+                        exportCtx.beginPath();
+                        exportCtx.roundRect(bx, by, bw, bh, radius);
+                        exportCtx.fill();
+
+                        exportCtx.fillStyle = '#ffffff';
+                        exportCtx.textBaseline = 'middle';
+                        exportCtx.textAlign = 'left';
+                        exportCtx.fillText(badgeText, bx + padX, by + bh / 2);
+                    }
+
+                    // ── Caption text (bottom-center of this world's slot) ──
+                    if (frame.caption) {
+                        const fontSize = numWorlds > 1 ? 11 : 14;
+                        exportCtx.font = `${fontSize}px "Courier New", monospace`;
+                        exportCtx.textAlign = 'center';
+                        exportCtx.textBaseline = 'alphabetic';
+                        const cx = ox + frameW / 2;
+                        const cy = oy + frameH - 20;
+
+                        exportCtx.strokeStyle = '#000000';
+                        exportCtx.lineWidth = 3;
+                        exportCtx.lineJoin = 'round';
+                        exportCtx.strokeText(frame.caption, cx, cy);
+
+                        exportCtx.fillStyle = frame.captionColor || '#e0e0e0';
+                        exportCtx.fillText(frame.caption, cx, cy);
+                    }
+
+                    // ── World label (top-left) ──
+                    if (numWorlds > 1) {
+                        exportCtx.font = '10px "Courier New", monospace';
+                        exportCtx.textAlign = 'left';
+                        exportCtx.textBaseline = 'top';
+                        exportCtx.fillStyle = 'rgba(255,255,255,0.4)';
+                        exportCtx.fillText(`World ${wId + 1}`, ox + 6, oy + 5);
+                    }
                 }
 
                 stream.getVideoTracks()[0].requestFrame();
-                // Pace at target fps
                 await new Promise((r) => setTimeout(r, 1000 / fps));
-                // Update progress
                 const pct = Math.round(((i + 1) / total) * 100);
                 exportProgress.style.width = pct + '%';
                 exportLabel.textContent = `timelapse: encoding ${pct}%`;
@@ -1957,13 +2132,16 @@
 
         fullscreenBtn.addEventListener('click', toggleFullscreen);
         document.getElementById('fsExitBtn').addEventListener('click', () => document.exitFullscreen());
-        document.getElementById('fsStopBtn').addEventListener('click', () => {
+        document.getElementById('fsExitBtn2').addEventListener('click', () => document.exitFullscreen());
+        const stopFromFullscreen = () => {
             if (ws?.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'stop' }));
                 setStatus('Stopping...', 'waiting');
                 bgMusic.pause();
             }
-        });
+        };
+        document.getElementById('fsStopBtn').addEventListener('click', stopFromFullscreen);
+        document.getElementById('fsStopBtn2').addEventListener('click', stopFromFullscreen);
 
         document.addEventListener('fullscreenchange', () => {
             fullscreenBtn.textContent = document.fullscreenElement ? '\u2715' : '\u26F6';
