@@ -56,8 +56,7 @@ uv run python -m apps.servers.web_server \
     --checkpoint_path Matrix-Game-2.0/base_distilled_model/base_distill.safetensors \
     --pretrained_model_path Matrix-Game-2.0 \
     --port 8888 \
-    --fast \
-    --no-warmup
+    --no-compile
 ```
 
 Then open `http://<your-server-ip>:8888` in your browser.
@@ -66,7 +65,7 @@ Then open `http://<your-server-ip>:8888` in your browser.
 
 | Flag | Description |
 |------|-------------|
-| `--fast` | Use 2 denoising steps instead of 3 (~33% faster, slight quality reduction) |
+| `--no-compile` | Skip torch.compile for faster startup (implies --no-warmup) |
 | `--port` | Server port (default: 8080) |
 
 ### Controls
