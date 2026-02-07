@@ -718,6 +718,7 @@ class InferenceEngine:
                 description=music_prompt + " Instrumental, loopable, video game background music.",
                 instrumental=True,
                 captcha_token=captcha_token,
+                model=self.args.suno_model,
             )
             clips = data.get("clips", [])
             clip_ids = [c["id"] for c in clips]
@@ -1630,19 +1631,25 @@ async def _modal_player_inference_loop(mrs: "ModalRoomState", player_id: str):
                     _modal_generate_caption(mrs, ps, result["last_frame_b64"], block_num)
                 )
 
+    except asyncio.CancelledError:
+        logger.info("[ModalRoom] Inference loop cancelled for %s", ps.name)
     except Exception as e:
         logger.exception("[ModalRoom] Inference loop error for %s", ps.name)
     finally:
-        # Cleanup
+        # Cleanup — end session on Modal worker
         try:
             await loop.run_in_executor(None, lambda: worker.end_session.remote())
         except Exception:
             pass
         ps.status = "disconnected"
-        mrs.active_count -= 1
-        logger.info("[ModalRoom] Player %s loop ended (block=%d)", ps.name, block_num)
-        await _modal_broadcast_player_list()
-        await _modal_activate_next_queued()
+        # mrs may have been set to None if room was closed
+        if mrs.is_active:
+            mrs.active_count = max(0, mrs.active_count - 1)
+            logger.info("[ModalRoom] Player %s loop ended (block=%d)", ps.name, block_num)
+            await _modal_broadcast_player_list()
+            await _modal_activate_next_queued()
+        else:
+            logger.info("[ModalRoom] Player %s loop ended (room closed, block=%d)", ps.name, block_num)
 
 
 async def _modal_generate_caption(mrs: "ModalRoomState", ps: "ModalPlayerState",
@@ -2077,6 +2084,13 @@ async def websocket_endpoint(websocket: WebSocket):
                         raw = data.get("image", "")
                         if raw and "," in raw:
                             seed_image_b64 = raw.split(",", 1)[1]
+                        elif raw and os.path.isfile(raw):
+                            # Server-side image path — load and encode
+                            import base64 as b64mod
+                            with open(raw, "rb") as f:
+                                seed_image_b64 = b64mod.b64encode(f.read()).decode()
+                            logger.info("[WS %s] Loaded seed image from path: %s (%d KB)",
+                                        client_label, raw, len(seed_image_b64) // 1024)
                         elif raw:
                             seed_image_b64 = raw
 
@@ -2211,6 +2225,9 @@ def parse_args():
                              "Near-instant startup but significantly slower inference (~2-4x)")
     parser.add_argument("--num-worlds", type=int, default=1,
                         help="Number of parallel worlds. Each world runs independently on its own GPU.")
+    parser.add_argument("--suno-model", type=str, default="chirp-auk-turbo",
+                        choices=["chirp-auk-turbo", "chirp-crow"],
+                        help="Suno music model: chirp-auk-turbo (v4.5, default) or chirp-crow (v5)")
     args = parser.parse_args()
 
     # Parse resolution

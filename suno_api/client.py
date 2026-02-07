@@ -148,7 +148,7 @@ class SunoClient:
         description: str = "",
         tags: str = "",
         title: str = "",
-        model: str = "chirp-crow",
+        model: str = "chirp-auk-turbo",
         instrumental: bool = False,
         captcha_token: str = "",
     ) -> dict:
