@@ -10,15 +10,21 @@ if ! command -v uv >/dev/null 2>&1; then
   export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
 fi
 
-# 1. Sync local uv environment from lockfile (all project deps, including torch)
+# 1. Install packages to local SSD instead of network-mounted /workspace.
+#    RunPod's /workspace is persistent but slow (network FS). /tmp is local NVMe.
+#    This cuts `import torch` from ~120s to ~10s. Re-run this script after pod restart.
+export UV_PROJECT_ENVIRONMENT="/tmp/ephemeral-venv"
 PYTHON_VERSION="3.12"
-echo "Syncing project environment from uv.lock..."
+echo "Syncing project environment to $UV_PROJECT_ENVIRONMENT..."
 uv sync --locked --python "$PYTHON_VERSION"
+
+# Symlink so `uv run` from the project directory finds it
+ln -sfn "$UV_PROJECT_ENVIRONMENT" .venv
 
 # 2. Install Flash Attention into the uv virtualenv (CUDA 12.8, Torch 2.8, Python 3.12)
 FLASH_ATTN_WHEEL="https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3+cu128torch2.8-cp312-cp312-linux_x86_64.whl"
 echo "Installing Flash Attention from: $FLASH_ATTN_WHEEL"
-uv pip install --python .venv/bin/python --no-deps "$FLASH_ATTN_WHEEL"
+uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" --no-deps "$FLASH_ATTN_WHEEL"
 
 # 3. Install Hugging Face CLI
 if ! command -v hf >/dev/null 2>&1; then
