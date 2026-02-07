@@ -1242,81 +1242,84 @@ class InferenceEngine:
         """Synchronous GPU work for one block of one world.
 
         Called from thread pool via run_in_executor. Returns (video_np, vae_cache, conditional_dict).
+        Note: torch.no_grad() is thread-local, so we must set it here (the caller's
+        context manager doesn't carry over to executor threads).
         """
-        pipeline = world.pipeline
-        device = world.device
-        noise = world.noise
-        conditional_dict = world.conditional_dict
-        vae_cache = world.vae_cache
+        with torch.no_grad():
+            pipeline = world.pipeline
+            device = world.device
+            noise = world.noise
+            conditional_dict = world.conditional_dict
+            vae_cache = world.vae_cache
 
-        num_frame_per_block = pipeline.num_frame_per_block
-        batch_size = noise.shape[0]
+            num_frame_per_block = pipeline.num_frame_per_block
+            batch_size = noise.shape[0]
 
-        current_actions = self._parse_action(action, device=device)
-        noisy_input = noise[:, :, current_start_frame:current_start_frame + num_frame_per_block]
+            current_actions = self._parse_action(action, device=device)
+            noisy_input = noise[:, :, current_start_frame:current_start_frame + num_frame_per_block]
 
-        new_act, conditional_dict = cond_current(
-            conditional_dict, current_start_frame, num_frame_per_block,
-            replace=current_actions, mode=self.mode)
+            new_act, conditional_dict = cond_current(
+                conditional_dict, current_start_frame, num_frame_per_block,
+                replace=current_actions, mode=self.mode)
 
-        # Denoising loop
-        for index, current_timestep in enumerate(pipeline.denoising_step_list):
-            timestep = torch.ones(
-                [batch_size, num_frame_per_block],
-                device=device, dtype=torch.int64) * current_timestep
+            # Denoising loop
+            for index, current_timestep in enumerate(pipeline.denoising_step_list):
+                timestep = torch.ones(
+                    [batch_size, num_frame_per_block],
+                    device=device, dtype=torch.int64) * current_timestep
 
-            if index < len(pipeline.denoising_step_list) - 1:
-                _, denoised_pred = pipeline.generator(
-                    noisy_image_or_video=noisy_input,
-                    conditional_dict=new_act,
-                    timestep=timestep,
-                    kv_cache=pipeline.kv_cache1,
-                    kv_cache_mouse=pipeline.kv_cache_mouse,
-                    kv_cache_keyboard=pipeline.kv_cache_keyboard,
-                    crossattn_cache=pipeline.crossattn_cache,
-                    current_start=current_start_frame * pipeline.frame_seq_length
-                )
-                next_timestep = pipeline.denoising_step_list[index + 1]
-                noisy_input = pipeline.scheduler.add_noise(
-                    rearrange(denoised_pred, 'b c f h w -> (b f) c h w'),
-                    torch.randn_like(rearrange(denoised_pred, 'b c f h w -> (b f) c h w')),
-                    next_timestep * torch.ones(
-                        [batch_size * num_frame_per_block], device=device, dtype=torch.long)
-                )
-                noisy_input = rearrange(noisy_input, '(b f) c h w -> b c f h w', b=denoised_pred.shape[0])
-            else:
-                _, denoised_pred = pipeline.generator(
-                    noisy_image_or_video=noisy_input,
-                    conditional_dict=new_act,
-                    timestep=timestep,
-                    kv_cache=pipeline.kv_cache1,
-                    kv_cache_mouse=pipeline.kv_cache_mouse,
-                    kv_cache_keyboard=pipeline.kv_cache_keyboard,
-                    crossattn_cache=pipeline.crossattn_cache,
-                    current_start=current_start_frame * pipeline.frame_seq_length
-                )
+                if index < len(pipeline.denoising_step_list) - 1:
+                    _, denoised_pred = pipeline.generator(
+                        noisy_image_or_video=noisy_input,
+                        conditional_dict=new_act,
+                        timestep=timestep,
+                        kv_cache=pipeline.kv_cache1,
+                        kv_cache_mouse=pipeline.kv_cache_mouse,
+                        kv_cache_keyboard=pipeline.kv_cache_keyboard,
+                        crossattn_cache=pipeline.crossattn_cache,
+                        current_start=current_start_frame * pipeline.frame_seq_length
+                    )
+                    next_timestep = pipeline.denoising_step_list[index + 1]
+                    noisy_input = pipeline.scheduler.add_noise(
+                        rearrange(denoised_pred, 'b c f h w -> (b f) c h w'),
+                        torch.randn_like(rearrange(denoised_pred, 'b c f h w -> (b f) c h w')),
+                        next_timestep * torch.ones(
+                            [batch_size * num_frame_per_block], device=device, dtype=torch.long)
+                    )
+                    noisy_input = rearrange(noisy_input, '(b f) c h w -> b c f h w', b=denoised_pred.shape[0])
+                else:
+                    _, denoised_pred = pipeline.generator(
+                        noisy_image_or_video=noisy_input,
+                        conditional_dict=new_act,
+                        timestep=timestep,
+                        kv_cache=pipeline.kv_cache1,
+                        kv_cache_mouse=pipeline.kv_cache_mouse,
+                        kv_cache_keyboard=pipeline.kv_cache_keyboard,
+                        crossattn_cache=pipeline.crossattn_cache,
+                        current_start=current_start_frame * pipeline.frame_seq_length
+                    )
 
-        # Context pass
-        context_timestep = torch.ones_like(timestep) * pipeline.args.context_noise
-        pipeline.generator(
-            noisy_image_or_video=denoised_pred,
-            conditional_dict=new_act,
-            timestep=context_timestep,
-            kv_cache=pipeline.kv_cache1,
-            kv_cache_mouse=pipeline.kv_cache_mouse,
-            kv_cache_keyboard=pipeline.kv_cache_keyboard,
-            crossattn_cache=pipeline.crossattn_cache,
-            current_start=current_start_frame * pipeline.frame_seq_length,
-        )
+            # Context pass
+            context_timestep = torch.ones_like(timestep) * pipeline.args.context_noise
+            pipeline.generator(
+                noisy_image_or_video=denoised_pred,
+                conditional_dict=new_act,
+                timestep=context_timestep,
+                kv_cache=pipeline.kv_cache1,
+                kv_cache_mouse=pipeline.kv_cache_mouse,
+                kv_cache_keyboard=pipeline.kv_cache_keyboard,
+                crossattn_cache=pipeline.crossattn_cache,
+                current_start=current_start_frame * pipeline.frame_seq_length,
+            )
 
-        # VAE decode
-        denoised_pred_t = denoised_pred.transpose(1, 2)
-        video, vae_cache = pipeline.vae_decoder(denoised_pred_t.half(), *vae_cache)
+            # VAE decode
+            denoised_pred_t = denoised_pred.transpose(1, 2)
+            video, vae_cache = pipeline.vae_decoder(denoised_pred_t.half(), *vae_cache)
 
-        video_np = rearrange(video, "B T C H W -> B T H W C")
-        video_np = ((video_np.float() + 1) * 127.5).clip(0, 255).cpu().numpy().astype(np.uint8)[0]
+            video_np = rearrange(video, "B T C H W -> B T H W C")
+            video_np = ((video_np.float() + 1) * 127.5).clip(0, 255).cpu().numpy().astype(np.uint8)[0]
 
-        return video_np, vae_cache, conditional_dict
+            return video_np, vae_cache, conditional_dict
 
     def stop(self):
         """Stop the inference loop."""
