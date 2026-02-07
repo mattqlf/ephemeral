@@ -689,7 +689,8 @@ class CausalWanModel(ModelMixin, ConfigMixin, FromOriginalModelMixin, PeftAdapte
         grid_sizes = torch.tensor(x.shape[2:], dtype=torch.long)
         x = x.flatten(2).transpose(1, 2) # B FHW C'
         seq_lens = torch.tensor([u.size(0) for u in x], dtype=torch.long)
-        assert seq_lens[0] <= 15 * 1 * 880
+        frame_seqlen = grid_sizes[1] * grid_sizes[2]
+        assert seq_lens[0] <= 15 * frame_seqlen
         
         e = self.time_embedding(
             sinusoidal_embedding_1d(self.freq_dim, t.flatten()).type_as(x))

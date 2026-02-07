@@ -154,7 +154,13 @@ class CausalInferencePipeline(torch.nn.Module):
             self.denoising_step_list = timesteps[1000 - self.denoising_step_list]
 
         self.num_transformer_blocks = 30
-        self.frame_seq_length = 880
+        # Compute frame_seq_length from latent resolution and patch_size (1,2,2)
+        # image_or_video_shape = [batch, channels, frames, latent_h, latent_w]
+        latent_h = args.image_or_video_shape[3]
+        latent_w = args.image_or_video_shape[4]
+        patch_h = self.generator.model.patch_size[1]
+        patch_w = self.generator.model.patch_size[2]
+        self.frame_seq_length = (latent_h // patch_h) * (latent_w // patch_w)
 
         self.kv_cache1 = None
         self.kv_cache_mouse = None
@@ -163,7 +169,7 @@ class CausalInferencePipeline(torch.nn.Module):
         self.num_frame_per_block = getattr(args, "num_frame_per_block", 1)
         self.local_attn_size = self.generator.model.local_attn_size
         assert self.local_attn_size != -1
-        print(f"KV inference with {self.num_frame_per_block} frames per block")
+        print(f"KV inference with {self.num_frame_per_block} frames per block, frame_seq_length={self.frame_seq_length}")
 
         if self.num_frame_per_block > 1:
             self.generator.model.num_frame_per_block = self.num_frame_per_block
@@ -454,7 +460,13 @@ class CausalInferenceStreamingPipeline(torch.nn.Module):
             self.denoising_step_list = timesteps[1000 - self.denoising_step_list]
 
         self.num_transformer_blocks = 30
-        self.frame_seq_length = 880 # 1590 # HW/4
+        # Compute frame_seq_length from latent resolution and patch_size (1,2,2)
+        # image_or_video_shape = [batch, channels, frames, latent_h, latent_w]
+        latent_h = args.image_or_video_shape[3]
+        latent_w = args.image_or_video_shape[4]
+        patch_h = self.generator.model.patch_size[1]
+        patch_w = self.generator.model.patch_size[2]
+        self.frame_seq_length = (latent_h // patch_h) * (latent_w // patch_w)
 
         self.kv_cache1 = None
         self.kv_cache_mouse = None
@@ -463,7 +475,7 @@ class CausalInferenceStreamingPipeline(torch.nn.Module):
         self.num_frame_per_block = getattr(args, "num_frame_per_block", 1)
         self.local_attn_size = self.generator.model.local_attn_size
         assert self.local_attn_size != -1
-        print(f"KV inference with {self.num_frame_per_block} frames per block")
+        print(f"KV inference with {self.num_frame_per_block} frames per block, frame_seq_length={self.frame_seq_length}")
 
         if self.num_frame_per_block > 1:
             self.generator.model.num_frame_per_block = self.num_frame_per_block
