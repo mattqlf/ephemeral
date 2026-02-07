@@ -1,1 +1,1 @@
-"""Utility modules for Matrix-Game."""
+"""Utility modules for Ephemeral."""

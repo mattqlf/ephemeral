@@ -972,49 +972,6 @@
             letter-spacing: 0.05em;
         }
 
-        .action-feed {
-            display: none;
-            width: 100%;
-            max-height: 140px;
-            overflow-y: auto;
-            border: 1px solid var(--border);
-            background: var(--bg);
-            scrollbar-width: thin;
-            scrollbar-color: var(--border-light) transparent;
-        }
-
-        .action-feed.visible {
-            display: block;
-        }
-
-        .action-feed::-webkit-scrollbar {
-            width: 4px;
-        }
-
-        .action-feed::-webkit-scrollbar-thumb {
-            background: var(--border-light);
-        }
-
-        .feed-entry {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 3px 8px;
-            font-size: 9px;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .feed-entry:last-child {
-            border-bottom: none;
-        }
-
-        .feed-name {
-            color: var(--accent);
-            min-width: 50px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
 
         /* Modal player grid (up to 8 players) */
         .modal-player-grid {
@@ -1085,14 +1042,6 @@
             letter-spacing: 0.05em;
         }
 
-        .feed-action {
-            color: var(--text-dim);
-        }
-
-        .feed-keys {
-            color: var(--text);
-            font-weight: 500;
-        }
 
     </style>
 </head>
@@ -1247,19 +1196,12 @@
 
             <div class="room-section">
                 <div class="section-title"><span>></span> Multiplayer</div>
-                <button class="room-btn" id="roomBtn">> Open Room</button>
-                <button class="room-btn" id="modalRoomBtn">> Modal Room</button>
-                <div class="room-panel" id="roomPanel">
-                    <div class="room-qr" id="roomQr"></div>
-                    <div class="room-url" id="roomUrl"></div>
-                    <div class="room-players" id="roomPlayers">0 players</div>
-                </div>
+                <button class="room-btn" id="modalRoomBtn">> Open Room</button>
                 <div class="room-panel" id="modalRoomPanel">
                     <div class="room-qr" id="modalRoomQr"></div>
                     <div class="room-url" id="modalRoomUrl"></div>
                     <div class="room-players" id="modalRoomPlayers">0 / 8 players</div>
                 </div>
-                <div class="action-feed" id="actionFeed"></div>
             </div>
 
             <div class="action-buttons">
@@ -1329,13 +1271,6 @@
         const exportProgress = document.getElementById('exportProgress');
         const fullscreenBtn = document.getElementById('fullscreenBtn');
 
-        const roomBtn = document.getElementById('roomBtn');
-        const roomPanel = document.getElementById('roomPanel');
-        const roomQr = document.getElementById('roomQr');
-        const roomUrl = document.getElementById('roomUrl');
-        const roomPlayers = document.getElementById('roomPlayers');
-        const actionFeed = document.getElementById('actionFeed');
-
         const modalRoomBtn = document.getElementById('modalRoomBtn');
         const modalRoomPanel = document.getElementById('modalRoomPanel');
         const modalRoomQr = document.getElementById('modalRoomQr');
@@ -1344,6 +1279,9 @@
 
         let modalRoomOpen = false;
         let modalPlayerCells = {};  // player_id -> {canvas, ctx, captionEl, nameEl, cell}
+        let modalRecordedFrames = {};  // player_id -> [{b64, block, name, caption, captionColor}]
+        let modalPlayerNames = {};  // player_id -> name
+        let modalPlayerCaptions = {};  // player_id -> {text, color} (latest caption)
 
         function setupWorlds(n, width, height) {
             numWorlds = n;
@@ -1421,11 +1359,12 @@
             resizeCanvases();
         }
 
-        let roomOpen = false;
         let captionFadeTimers = {};   // world_id -> timeout id
         let captionTypeTimers = {};   // world_id -> interval id
         let recordedFrames = [];
         let pendingMusicUrls = null;  // stored when autoplay fails
+        let musicPendingPlay = false; // true when music is ready but autoplay was blocked
+        let generatedImageB64 = null; // Gemini-generated image, reused for Open Room
         let lastSentKeyboard = 'q';
         let lastSentMouse = 'u';
         let activeCaptionText = '';
@@ -1627,7 +1566,7 @@
         }
 
         function resetInputState() {
-            inputStep = roomOpen ? 1 : 0;
+            inputStep = 0;
             currentCamera = currentMovement = null;
             cameraValue.textContent = moveValue.textContent = '-';
             step1.classList.remove('active', 'complete');
@@ -1707,6 +1646,13 @@
                 lastSentKeyboard = currentMovement;
                 lastSentMouse = currentCamera;
                 setStatus('Processing...', 'waiting');
+                // User gesture — try starting music if autoplay was blocked
+                if (musicPendingPlay && bgMusic.src) {
+                    bgMusic.play().then(() => {
+                        musicPendingPlay = false;
+                        setMusicState('playing', 'playing');
+                    }).catch(() => {});
+                }
             }
         }
 
@@ -1752,6 +1698,7 @@
                     inputDisplay.textContent = `> ${msg.message || 'generating world with Gemini...'}`;
                     break;
                 case 'image_preview': {
+                    generatedImageB64 = msg.data;
                     const previewImage = new Image();
                     previewImage.onload = () => {
                         worldCanvases.forEach(wc => wc.ctx.drawImage(previewImage, 0, 0, wc.canvas.width, wc.canvas.height));
@@ -1764,7 +1711,6 @@
                 case 'complete': case 'stopped':
                     setStatus(msg.type === 'complete' ? 'Complete' : 'Stopped', 'connected');
                     isRunning = false; startBtn.disabled = false; stopBtn.disabled = true;
-                    resetRoomUI();
                     resetInputState(); inputDisplay.textContent = `> ${msg.type}`;
                     if (recordedFrames.length > 1) {
                         exportBtn.style.display = '';
@@ -1823,33 +1769,6 @@
                     }, 35);
                     break;
                 }
-                case 'room_opened': {
-                    roomOpen = true;
-                    roomBtn.textContent = '> Close Room';
-                    roomBtn.classList.add('active');
-                    roomPanel.classList.add('visible');
-                    // Build URL client-side so it uses the host the browser actually connected to
-                    // (avoids Docker internal IPs like 172.18.x.x in the QR code)
-                    const roomPath = new URL(msg.url).pathname;
-                    const publicRoomUrl = location.origin + roomPath;
-                    roomUrl.textContent = publicRoomUrl;
-                    roomPlayers.textContent = `${msg.player_count} player${msg.player_count !== 1 ? 's' : ''}`;
-                    // Generate QR code
-                    const qr = qrcode(0, 'M');
-                    qr.addData(publicRoomUrl);
-                    qr.make();
-                    roomQr.innerHTML = qr.createImgTag(3, 0);
-                    break;
-                }
-                case 'room_closed':
-                    resetRoomUI();
-                    break;
-                case 'room_update':
-                    roomPlayers.textContent = `${msg.player_count} player${msg.player_count !== 1 ? 's' : ''}`;
-                    break;
-                case 'action_feed':
-                    appendFeedEntry(msg.name, msg.keyboard, msg.mouse);
-                    break;
                 case 'music_status':
                     setMusicState('generating', msg.message || '...');
                     break;
@@ -1858,10 +1777,13 @@
                         pendingMusicUrls = msg.audio_urls;
                         bgMusic.src = msg.audio_urls[0];
                         bgMusic.volume = 0.4;
+                        bgMusic.load();
                         bgMusic.play().then(() => {
+                            musicPendingPlay = false;
                             setMusicState('playing', msg.title || 'playing');
                         }).catch(() => {
-                            // Autoplay blocked — show play button
+                            // Autoplay blocked — next user gesture (key press or play btn) will start it
+                            musicPendingPlay = true;
                             setMusicState('paused', (msg.title || 'ready') + ' — click play');
                         });
                     } else {
@@ -1872,7 +1794,7 @@
                 // ── Modal Room messages ──
                 case 'modal_room_opened': {
                     modalRoomOpen = true;
-                    modalRoomBtn.textContent = '> Close Modal Room';
+                    modalRoomBtn.textContent = '> Close Room';
                     modalRoomBtn.classList.add('active');
                     modalRoomPanel.classList.add('visible');
                     const roomPath = new URL(msg.url).pathname;
@@ -1885,12 +1807,28 @@
                     modalRoomQr.innerHTML = qr.createImgTag(3, 0);
                     // Hide solo worlds grid, prepare for player grid
                     worldsGrid.style.display = 'none';
+                    // Clear previous room recording
+                    modalRecordedFrames = {};
+                    modalPlayerNames = {};
+                    modalPlayerCaptions = {};
+                    exportBtn.style.display = 'none';
+                    exportBar.style.display = 'none';
                     break;
                 }
 
-                case 'modal_room_closed':
+                case 'modal_room_closed': {
+                    const totalRoomFrames = Object.values(modalRecordedFrames).reduce((s, f) => s + f.length, 0);
                     resetModalRoomUI();
+                    if (totalRoomFrames > 0) {
+                        exportBtn.style.display = '';
+                        exportBtn.disabled = false;
+                        exportBar.style.display = 'flex';
+                        const playerCount = Object.keys(modalRecordedFrames).length;
+                        exportLabel.textContent = `room export: ${playerCount} players, ${totalRoomFrames} frames ready`;
+                        exportProgress.style.width = '0%';
+                    }
                     break;
+                }
 
                 case 'modal_room_update':
                     modalRoomPlayers.textContent = `${msg.active_count} / ${msg.max_active} players`;
@@ -1901,19 +1839,40 @@
 
                 case 'modal_player_frame':
                     displayModalPlayerFrame(msg.player_id, msg.data);
+                    if (msg.player_name) modalPlayerNames[msg.player_id] = msg.player_name;
+                    if (!modalRecordedFrames[msg.player_id]) modalRecordedFrames[msg.player_id] = [];
+                    modalRecordedFrames[msg.player_id].push({
+                        b64: msg.data,
+                        block: msg.block || 0,
+                        name: modalPlayerNames[msg.player_id] || msg.player_id,
+                        caption: (modalPlayerCaptions[msg.player_id] || {}).text || '',
+                        captionColor: (modalPlayerCaptions[msg.player_id] || {}).color || '',
+                    });
                     break;
 
                 case 'modal_player_caption':
                     showModalPlayerCaption(msg.player_id, msg.text, msg.color);
+                    modalPlayerCaptions[msg.player_id] = { text: msg.text, color: msg.color };
                     break;
             }
         }
 
+        const _soloFrameSeq = {};
+        const _soloNextDraw = {};
+        const _soloFrameBuffer = {};
         function displayFrame(b64, block, worldId) {
             const wc = worldCanvases[worldId] || worldCanvases[0];
+            if (!_soloFrameSeq[worldId]) { _soloFrameSeq[worldId] = 0; _soloNextDraw[worldId] = 1; _soloFrameBuffer[worldId] = {}; }
+            const seq = ++_soloFrameSeq[worldId];
             const img = new Image();
             img.onload = () => {
-                wc.ctx.drawImage(img, 0, 0, wc.canvas.width, wc.canvas.height);
+                _soloFrameBuffer[worldId][seq] = img;
+                while (_soloFrameBuffer[worldId][_soloNextDraw[worldId]]) {
+                    const s = _soloNextDraw[worldId];
+                    wc.ctx.drawImage(_soloFrameBuffer[worldId][s], 0, 0, wc.canvas.width, wc.canvas.height);
+                    delete _soloFrameBuffer[worldId][s];
+                    _soloNextDraw[worldId]++;
+                }
                 recordedFrames.push({
                     b64,
                     block,
@@ -1942,51 +1901,6 @@
                 else if (type === 'movement') handleMovementInput(key);
             });
         });
-
-        roomBtn.addEventListener('click', () => {
-            if (ws?.readyState !== WebSocket.OPEN) return;
-            if (!roomOpen) {
-                ws.send(JSON.stringify({ type: 'open_room' }));
-            } else {
-                ws.send(JSON.stringify({ type: 'close_room' }));
-            }
-        });
-
-        const KEY_LABELS = {
-            w: 'W fwd', s: 'S back', a: 'A left', d: 'D right', q: '-',
-            i: 'I up', k: 'K down', j: 'J left', l: 'L right', u: '-',
-        };
-
-        function appendFeedEntry(name, keyboard, mouse) {
-            actionFeed.classList.add('visible');
-            const entry = document.createElement('div');
-            entry.className = 'feed-entry';
-            const kb = KEY_LABELS[keyboard] || keyboard.toUpperCase();
-            const ms = KEY_LABELS[mouse] || mouse.toUpperCase();
-            // Show the meaningful key (skip the neutral '-')
-            let keyStr;
-            if (kb !== '-' && ms !== '-') keyStr = `${kb} + ${ms}`;
-            else if (kb !== '-') keyStr = kb;
-            else if (ms !== '-') keyStr = ms;
-            else keyStr = 'idle';
-            entry.innerHTML = `<span class="feed-name">${name}</span><span class="feed-action">&rarr;</span><span class="feed-keys">${keyStr}</span>`;
-            actionFeed.appendChild(entry);
-            // Keep max 50 entries
-            while (actionFeed.children.length > 50) actionFeed.removeChild(actionFeed.firstChild);
-            actionFeed.scrollTop = actionFeed.scrollHeight;
-        }
-
-        function resetRoomUI() {
-            roomOpen = false;
-            roomBtn.textContent = '> Open Room';
-            roomBtn.classList.remove('active');
-            roomPanel.classList.remove('visible');
-            roomQr.innerHTML = '';
-            roomUrl.textContent = '';
-            roomPlayers.textContent = '0 players';
-            actionFeed.innerHTML = '';
-            actionFeed.classList.remove('visible');
-        }
 
         // ── Modal Room ──
         function setupModalGrid(players) {
@@ -2098,15 +2012,25 @@
             }
         }
 
+        const _modalPlayerFrameSeq = {};
+        const _modalPlayerNextDraw = {};
+        const _modalPlayerFrameBuffer = {};
         function displayModalPlayerFrame(playerId, b64) {
             const info = modalPlayerCells[playerId];
             if (!info) return;
-            // Remove waiting indicator on first frame
             const waiting = info.cell.querySelector('.modal-player-waiting');
             if (waiting) waiting.remove();
+            if (!_modalPlayerFrameSeq[playerId]) { _modalPlayerFrameSeq[playerId] = 0; _modalPlayerNextDraw[playerId] = 1; _modalPlayerFrameBuffer[playerId] = {}; }
+            const seq = ++_modalPlayerFrameSeq[playerId];
             const img = new Image();
             img.onload = () => {
-                info.ctx.drawImage(img, 0, 0, info.canvas.width, info.canvas.height);
+                _modalPlayerFrameBuffer[playerId][seq] = img;
+                while (_modalPlayerFrameBuffer[playerId][_modalPlayerNextDraw[playerId]]) {
+                    const s = _modalPlayerNextDraw[playerId];
+                    info.ctx.drawImage(_modalPlayerFrameBuffer[playerId][s], 0, 0, info.canvas.width, info.canvas.height);
+                    delete _modalPlayerFrameBuffer[playerId][s];
+                    _modalPlayerNextDraw[playerId]++;
+                }
             };
             img.src = 'data:image/jpeg;base64,' + b64;
         }
@@ -2148,7 +2072,7 @@
 
         function resetModalRoomUI() {
             modalRoomOpen = false;
-            modalRoomBtn.textContent = '> Modal Room';
+            modalRoomBtn.textContent = '> Open Room';
             modalRoomBtn.classList.remove('active');
             modalRoomPanel.classList.remove('visible');
             modalRoomQr.innerHTML = '';
@@ -2179,22 +2103,29 @@
         modalRoomBtn.addEventListener('click', () => {
             if (ws?.readyState !== WebSocket.OPEN) return;
             if (!modalRoomOpen) {
-                // Need a seed image
+                const prompt = promptInput.value.trim();
                 const isUpload = document.querySelector('[data-tab="upload"]').classList.contains('active');
                 const image = isUpload ? (uploadedImageData || null) : imageSelect.value;
-                if (!image) {
-                    inputDisplay.textContent = '> select a seed image first';
-                    return;
-                }
-                // Send open_modal_room with the image
                 const msg = { type: 'open_modal_room', mode: 'universal' };
-                if (isUpload && uploadedImageData) {
-                    // data:image/...;base64,XXX → strip prefix
-                    msg.image = uploadedImageData;
-                } else {
-                    // Server-side image path — server will load and encode it
-                    msg.seed_image_b64 = '';
+                if (generatedImageB64) {
+                    // Reuse the Gemini-generated image (from solo play or prior generation)
+                    msg.seed_image_b64 = generatedImageB64;
+                    inputDisplay.textContent = '> opening room with generated image...';
+                    setStatus('Opening room...', 'waiting');
+                } else if (prompt) {
+                    // Generate new image with Gemini
+                    if (image) msg.image = image;
+                    msg.prompt = prompt;
+                    inputDisplay.textContent = '> generating world with Gemini...';
+                    setStatus('Generating image...', 'waiting');
+                } else if (image) {
+                    // Use selected/uploaded image directly
                     msg.image = image;
+                    inputDisplay.textContent = '> opening room...';
+                    setStatus('Opening room...', 'waiting');
+                } else {
+                    inputDisplay.textContent = '> provide an image or prompt first';
+                    return;
                 }
                 ws.send(JSON.stringify(msg));
             } else {
@@ -2206,8 +2137,10 @@
             if (ws?.readyState === WebSocket.OPEN) {
                 isRunning = true; startBtn.disabled = true; stopBtn.disabled = false;
                 resetInputState();
-                bgMusic.pause(); bgMusic.src = '';
+                bgMusic.pause();
+                bgMusic.src = '';
                 pendingMusicUrls = null;
+                musicPendingPlay = false;
                 musicBar.style.display = 'none';
                 musicBar.className = 'music-bar';
                 musicPlayBtn.style.display = 'none';
@@ -2274,17 +2207,38 @@
         });
 
         musicPlayBtn.addEventListener('click', () => {
-            if (bgMusic.src) {
+            if (pendingMusicUrls && pendingMusicUrls.length > 0) {
+                // Re-set src in case it was cleared, then play
+                if (!bgMusic.src || bgMusic.src === location.href) {
+                    bgMusic.src = pendingMusicUrls[0];
+                    bgMusic.volume = 0.4;
+                    bgMusic.load();
+                }
                 bgMusic.play().then(() => {
+                    musicPendingPlay = false;
                     setMusicState('playing', 'playing');
                 }).catch((e) => {
                     console.warn('Music play failed:', e);
+                    setMusicState('error', 'playback failed');
                 });
             }
         });
 
         // ── Timelapse export ──
-        exportBtn.addEventListener('click', () => exportTimelapse());
+        exportBtn.addEventListener('click', () => {
+            const hasRoomFrames = Object.keys(modalRecordedFrames).length > 0 &&
+                Object.values(modalRecordedFrames).some(f => f.length > 0);
+            if (hasRoomFrames) {
+                exportRoomGrid();
+            } else {
+                exportTimelapse();
+            }
+        });
+
+        const KEY_LABELS = {
+            w: 'W fwd', s: 'S back', a: 'A left', d: 'D right', q: '-',
+            i: 'I up', k: 'K down', j: 'J left', l: 'L right', u: '-',
+        };
 
         async function exportTimelapse() {
             if (recordedFrames.length < 2) return;
@@ -2441,6 +2395,124 @@
             URL.revokeObjectURL(url);
 
             exportLabel.textContent = `timelapse: exported (${(blob.size / 1024 / 1024).toFixed(1)} MB)`;
+            exportProgress.style.width = '100%';
+            exportBtn.disabled = false;
+        }
+
+        async function exportRoomGrid() {
+            const playerIds = Object.keys(modalRecordedFrames).filter(
+                pid => modalRecordedFrames[pid].length > 0
+            );
+            if (playerIds.length === 0) return;
+
+            exportBtn.disabled = true;
+            exportLabel.textContent = 'room export: encoding...';
+            exportProgress.style.width = '0%';
+
+            // Grid layout based on player count
+            const count = playerIds.length;
+            const cols = count <= 1 ? 1 : count <= 4 ? 2 : count <= 6 ? 3 : 4;
+            const rows = Math.ceil(count / cols);
+
+            const cellW = 640;
+            const cellH = 360;
+            const gap = 2;
+            const nameBarH = 24;
+            const exportW = cols * cellW + (cols - 1) * gap;
+            const exportH = rows * (cellH + nameBarH) + (rows - 1) * gap;
+
+            const fps = 25;
+            const exportCanvas = document.createElement('canvas');
+            exportCanvas.width = exportW;
+            exportCanvas.height = exportH;
+            const exportCtx = exportCanvas.getContext('2d');
+
+            const stream = exportCanvas.captureStream(0);
+            const recorder = new MediaRecorder(stream, {
+                mimeType: 'video/webm;codecs=vp9',
+                videoBitsPerSecond: Math.min(count * 4_000_000, 20_000_000),
+            });
+
+            const chunks = [];
+            recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+            const done = new Promise((resolve) => { recorder.onstop = resolve; });
+            recorder.start();
+
+            // Find the max frame count across all players
+            const maxLen = Math.max(...playerIds.map(pid => modalRecordedFrames[pid].length));
+            const total = maxLen;
+
+            for (let fi = 0; fi < total; fi++) {
+                // Black background
+                exportCtx.fillStyle = '#0a0a0a';
+                exportCtx.fillRect(0, 0, exportW, exportH);
+
+                for (let pi = 0; pi < playerIds.length; pi++) {
+                    const pid = playerIds[pi];
+                    const frames = modalRecordedFrames[pid];
+                    // Use last available frame if this player has fewer frames
+                    const frame = frames[Math.min(fi, frames.length - 1)];
+
+                    const col = pi % cols;
+                    const row = Math.floor(pi / cols);
+                    const ox = col * (cellW + gap);
+                    const oy = row * (cellH + nameBarH + gap);
+
+                    // Draw frame
+                    const img = new Image();
+                    await new Promise((resolve) => {
+                        img.onload = resolve;
+                        img.onerror = resolve;
+                        img.src = 'data:image/jpeg;base64,' + frame.b64;
+                    });
+                    exportCtx.drawImage(img, ox, oy, cellW, cellH);
+
+                    // Name bar
+                    exportCtx.fillStyle = 'rgba(0,0,0,0.7)';
+                    exportCtx.fillRect(ox, oy + cellH, cellW, nameBarH);
+                    exportCtx.font = '13px "Courier New", monospace';
+                    exportCtx.fillStyle = '#00d4aa';
+                    exportCtx.textAlign = 'left';
+                    exportCtx.textBaseline = 'middle';
+                    exportCtx.fillText(frame.name || `Player ${pi + 1}`, ox + 8, oy + cellH + nameBarH / 2);
+
+                    // Caption overlay
+                    if (frame.caption) {
+                        exportCtx.font = '12px "Courier New", monospace';
+                        exportCtx.textAlign = 'center';
+                        exportCtx.textBaseline = 'alphabetic';
+                        const cx = ox + cellW / 2;
+                        const cy = oy + cellH - 16;
+
+                        exportCtx.strokeStyle = '#000000';
+                        exportCtx.lineWidth = 3;
+                        exportCtx.lineJoin = 'round';
+                        exportCtx.strokeText(frame.caption, cx, cy);
+
+                        exportCtx.fillStyle = frame.captionColor || '#FFFFFF';
+                        exportCtx.fillText(frame.caption, cx, cy);
+                    }
+                }
+
+                stream.getVideoTracks()[0].requestFrame();
+                await new Promise((r) => setTimeout(r, 1000 / fps));
+                const pct = Math.round(((fi + 1) / total) * 100);
+                exportProgress.style.width = pct + '%';
+                exportLabel.textContent = `room export: encoding ${pct}%`;
+            }
+
+            recorder.stop();
+            await done;
+
+            const blob = new Blob(chunks, { type: 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `ephemeral-room-${Date.now()}.webm`;
+            a.click();
+            URL.revokeObjectURL(url);
+
+            exportLabel.textContent = `room export: done (${(blob.size / 1024 / 1024).toFixed(1)} MB, ${playerIds.length} players)`;
             exportProgress.style.width = '100%';
             exportBtn.disabled = false;
         }

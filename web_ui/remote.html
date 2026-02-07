@@ -39,6 +39,7 @@
             justify-content: space-between;
             padding: 14px 18px;
             border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
         }
 
         .logo {
@@ -65,6 +66,11 @@
         .status-dot.connected {
             background: var(--accent);
             box-shadow: 0 0 8px var(--accent);
+        }
+
+        .status-dot.waiting {
+            background: var(--accent);
+            animation: blink 1s step-end infinite;
         }
 
         .status-dot.error {
@@ -225,57 +231,161 @@
             color: var(--text-muted);
         }
 
-        /* World selection overlay */
-        .world-select-overlay {
+        /* ── Modal mode: video canvas + controls layout ── */
+        .modal-layout {
+            display: none;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .modal-layout.active {
+            display: flex;
+        }
+
+        .video-area {
+            flex: 1;
+            position: relative;
+            background: #000;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .video-area canvas {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            max-width: 100%;
+            max-height: 100%;
+            image-rendering: pixelated;
+        }
+
+        .caption-overlay {
+            position: absolute;
+            bottom: 10%;
+            left: 0;
+            right: 0;
+            text-align: center;
+            pointer-events: none;
+            padding: 0 10px;
+        }
+
+        .caption-text {
+            display: inline-block;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            color: #e0e0e0;
+            text-shadow: 0 0 8px rgba(0, 212, 170, 0.4), 0 1px 3px rgba(0,0,0,0.9);
+            letter-spacing: 0.04em;
+            line-height: 1.5;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .caption-text.visible { opacity: 1; }
+        .caption-text.fading { opacity: 0; transition: opacity 1.5s ease; }
+
+        .caption-cursor {
+            display: inline-block;
+            width: 2px;
+            height: 14px;
+            background: var(--accent);
+            margin-left: 2px;
+            vertical-align: middle;
+            animation: blink 0.6s step-end infinite;
+        }
+
+        .modal-controls {
+            display: flex;
+            gap: 12px;
+            padding: 12px;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .modal-controls .key {
+            width: 52px;
+            height: 52px;
+            font-size: 14px;
+        }
+
+        .modal-controls .key-hint {
+            font-size: 7px;
+        }
+
+        /* Queue overlay */
+        .queue-overlay {
+            display: none;
             position: fixed;
             inset: 0;
             background: var(--bg);
-            display: flex;
             align-items: center;
             justify-content: center;
             flex-direction: column;
             gap: 16px;
-            z-index: 100;
+            z-index: 90;
         }
 
-        .world-select-overlay.hidden {
-            display: none;
+        .queue-overlay.visible {
+            display: flex;
         }
 
-        .world-buttons {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 10px;
-            padding: 0 20px;
+        .queue-position {
+            font-size: 48px;
+            color: var(--accent);
+            font-weight: bold;
         }
 
-        .world-btn {
-            padding: 16px 24px;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
+        .queue-label {
+            font-size: 11px;
+            color: var(--text-dim);
             text-transform: uppercase;
             letter-spacing: 0.1em;
-            border: 1px solid var(--border-light);
-            background: transparent;
-            color: var(--text);
-            cursor: pointer;
-            transition: all 0.15s;
-            text-align: center;
-            -webkit-tap-highlight-color: transparent;
         }
 
-        .world-btn:active, .world-btn:hover {
-            border-color: var(--accent);
-            color: var(--accent);
+        .queue-message {
+            font-size: 10px;
+            color: var(--text-muted);
         }
 
-        .world-btn-sub {
-            display: block;
-            font-size: 8px;
+        /* Loading overlay */
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: var(--bg);
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 16px;
+            z-index: 90;
+        }
+
+        .loading-overlay.visible {
+            display: flex;
+        }
+
+        .loading-spinner {
+            width: 32px;
+            height: 32px;
+            border: 2px solid var(--border-light);
+            border-top: 2px solid var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            font-size: 11px;
             color: var(--text-dim);
-            margin-top: 4px;
-            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
         }
+
     </style>
 </head>
 <body>
@@ -283,11 +393,6 @@
         <div class="name-title">Enter your name</div>
         <input type="text" class="name-input" id="nameInput" placeholder="Player" maxlength="16" autocomplete="off" />
         <button class="name-go-btn" id="nameGoBtn">> Join</button>
-    </div>
-
-    <div class="world-select-overlay hidden" id="worldSelectOverlay">
-        <div class="name-title">Select Your World</div>
-        <div class="world-buttons" id="worldButtons"></div>
     </div>
 
     <header>
@@ -299,42 +404,63 @@
         </div>
     </header>
 
-    <div class="main">
-        <div class="control-group">
-            <div class="group-label">Camera</div>
-            <div class="key-grid">
-                <div class="key empty"></div>
-                <div class="key" data-key="i" data-type="camera"><span>I</span><span class="key-hint">up</span></div>
-                <div class="key empty"></div>
-                <div class="key" data-key="j" data-type="camera"><span>J</span><span class="key-hint">left</span></div>
-                <div class="key" data-key="u" data-type="camera"><span>U</span><span class="key-hint">none</span></div>
-                <div class="key" data-key="l" data-type="camera"><span>L</span><span class="key-hint">right</span></div>
-                <div class="key empty"></div>
-                <div class="key" data-key="k" data-type="camera"><span>K</span><span class="key-hint">down</span></div>
-                <div class="key empty"></div>
+    <!-- Video + controls -->
+    <div class="modal-layout" id="modalLayout">
+        <div class="video-area">
+            <canvas id="videoCanvas" width="640" height="352"></canvas>
+            <div class="caption-overlay">
+                <span class="caption-text" id="captionText"></span>
             </div>
         </div>
+        <div class="modal-controls">
+            <div class="control-group">
+                <div class="key-grid">
+                    <div class="key empty"></div>
+                    <div class="key" data-key="i" data-type="camera"><span>I</span><span class="key-hint">up</span></div>
+                    <div class="key empty"></div>
+                    <div class="key" data-key="j" data-type="camera"><span>J</span><span class="key-hint">left</span></div>
+                    <div class="key" data-key="u" data-type="camera"><span>U</span><span class="key-hint">none</span></div>
+                    <div class="key" data-key="l" data-type="camera"><span>L</span><span class="key-hint">right</span></div>
+                    <div class="key empty"></div>
+                    <div class="key" data-key="k" data-type="camera"><span>K</span><span class="key-hint">down</span></div>
+                    <div class="key empty"></div>
+                </div>
+            </div>
+            <div class="control-group">
+                <div class="key-grid">
+                    <div class="key empty"></div>
+                    <div class="key" data-key="w" data-type="movement"><span>W</span><span class="key-hint">fwd</span></div>
+                    <div class="key empty"></div>
+                    <div class="key" data-key="a" data-type="movement"><span>A</span><span class="key-hint">left</span></div>
+                    <div class="key" data-key="q" data-type="movement"><span>Q</span><span class="key-hint">none</span></div>
+                    <div class="key" data-key="d" data-type="movement"><span>D</span><span class="key-hint">right</span></div>
+                    <div class="key empty"></div>
+                    <div class="key" data-key="s" data-type="movement"><span>S</span><span class="key-hint">back</span></div>
+                    <div class="key empty"></div>
+                </div>
+            </div>
+        </div>
+    </div>
 
-        <div class="control-group">
-            <div class="group-label">Movement</div>
-            <div class="key-grid">
-                <div class="key empty"></div>
-                <div class="key" data-key="w" data-type="movement"><span>W</span><span class="key-hint">fwd</span></div>
-                <div class="key empty"></div>
-                <div class="key" data-key="a" data-type="movement"><span>A</span><span class="key-hint">left</span></div>
-                <div class="key" data-key="q" data-type="movement"><span>Q</span><span class="key-hint">none</span></div>
-                <div class="key" data-key="d" data-type="movement"><span>D</span><span class="key-hint">right</span></div>
-                <div class="key empty"></div>
-                <div class="key" data-key="s" data-type="movement"><span>S</span><span class="key-hint">back</span></div>
-                <div class="key empty"></div>
-            </div>
-        </div>
+    <!-- Queue overlay -->
+    <div class="queue-overlay" id="queueOverlay">
+        <div class="queue-label">Queue Position</div>
+        <div class="queue-position" id="queuePosition">-</div>
+        <div class="queue-message" id="queueMessage">Waiting for a spot...</div>
+    </div>
+
+    <!-- Loading overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text" id="loadingText">Loading your world...</div>
     </div>
 
     <div class="closed-overlay" id="closedOverlay">
         <div class="closed-title">Room Closed</div>
         <div class="closed-sub">The host ended the session</div>
     </div>
+
+    <audio id="bgMusic" loop preload="none"></audio>
 
     <script>
         const statusDot = document.getElementById('statusDot');
@@ -344,16 +470,26 @@
         const nameOverlay = document.getElementById('nameOverlay');
         const nameInput = document.getElementById('nameInput');
         const nameGoBtn = document.getElementById('nameGoBtn');
-        const worldSelectOverlay = document.getElementById('worldSelectOverlay');
-        const worldButtons = document.getElementById('worldButtons');
+        const modalLayout = document.getElementById('modalLayout');
+        const videoCanvas = document.getElementById('videoCanvas');
+        const videoCtx = videoCanvas.getContext('2d');
+        const captionText = document.getElementById('captionText');
+        const queueOverlay = document.getElementById('queueOverlay');
+        const queuePosition = document.getElementById('queuePosition');
+        const queueMessage = document.getElementById('queueMessage');
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        const loadingText = document.getElementById('loadingText');
+        const bgMusic = document.getElementById('bgMusic');
 
-        // Extract room_id from URL path: /room/{room_id}
+        // Extract room_id from URL path: /room/{room_id} or /modal-room/{room_id}
         const pathParts = location.pathname.split('/');
         const roomId = pathParts[pathParts.length - 1];
-
         let ws = null;
         let playerName = '';
-        let selectedWorldId = 0;
+        let lastKeyboard = 'q';
+        let lastMouse = 'u';
+        let captionFadeTimer = null;
+        let captionTypeTimer = null;
 
         // ── Name entry ──
         nameInput.addEventListener('keydown', (e) => {
@@ -374,11 +510,11 @@
 
         function connect() {
             const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${protocol}//${location.host}/ws/room/${roomId}`);
+            const wsPath = `/ws/modal-room/${roomId}`;
+            ws = new WebSocket(`${protocol}//${location.host}${wsPath}`);
 
             ws.onopen = () => {
                 setStatus('Connected', 'connected');
-                // Send join with name
                 ws.send(JSON.stringify({ type: 'join', name: playerName }));
             };
 
@@ -393,70 +529,178 @@
             };
 
             ws.onerror = () => setStatus('Error', 'error');
+            ws.onmessage = (e) => handleMessage(JSON.parse(e.data));
+        }
 
-            ws.onmessage = (e) => {
-                const msg = JSON.parse(e.data);
-                switch (msg.type) {
-                    case 'room_joined':
-                        setStatus('Joined', 'connected');
-                        playerCount.textContent = `${msg.player_count} player${msg.player_count !== 1 ? 's' : ''}`;
-                        break;
-                    case 'room_update':
-                        playerCount.textContent = `${msg.player_count} player${msg.player_count !== 1 ? 's' : ''}`;
-                        break;
-                    case 'room_closed':
-                        closedOverlay.classList.add('visible');
-                        break;
-                    case 'select_world':
-                        showWorldSelection(msg.num_worlds);
-                        break;
+        function handleMessage(msg) {
+            switch (msg.type) {
+                case 'queued':
+                    queueOverlay.classList.add('visible');
+                    loadingOverlay.classList.remove('visible');
+                    queuePosition.textContent = `#${msg.position}`;
+                    queueMessage.textContent = msg.message || 'Waiting for a spot...';
+                    setStatus(`Queue #${msg.position}`, 'waiting');
+                    break;
+
+                case 'initializing':
+                    queueOverlay.classList.remove('visible');
+                    loadingOverlay.classList.add('visible');
+                    loadingText.textContent = msg.message || 'Loading your world...';
+                    setStatus('Loading...', 'waiting');
+                    break;
+
+                case 'ready':
+                    // Switch to Modal mode layout
+                    enterModalMode(msg.resolution);
+                    setStatus('Playing', 'connected');
+                    break;
+
+                case 'frame':
+                    displayFrame(msg.data);
+                    break;
+
+                case 'request_action':
+                    // Don't auto-send — wait for the player to tap
+                    setStatus(`Block ${msg.block}`, 'connected');
+                    break;
+
+                case 'caption':
+                    showCaption(msg.text, msg.color);
+                    break;
+
+                case 'music_ready':
+                    if (msg.audio_urls && msg.audio_urls.length > 0) {
+                        bgMusic.src = msg.audio_urls[0];
+                        bgMusic.volume = 0.4;
+                        bgMusic.play().catch(() => {});
+                    }
+                    break;
+
+                case 'room_closed':
+                    closedOverlay.classList.add('visible');
+                    break;
+
+                case 'error':
+                    setStatus('Error', 'error');
+                    loadingOverlay.classList.remove('visible');
+                    queueOverlay.classList.remove('visible');
+                    break;
+
+                case 'session_ended':
+                    closedOverlay.querySelector('.closed-title').textContent = 'Session Ended';
+                    closedOverlay.querySelector('.closed-sub').textContent = msg.reason || 'Your session has ended';
+                    closedOverlay.classList.add('visible');
+                    break;
+            }
+        }
+
+        function enterModalMode(resolution) {
+            modalLayout.classList.add('active');
+            queueOverlay.classList.remove('visible');
+            loadingOverlay.classList.remove('visible');
+
+            if (resolution) {
+                const [w, h] = resolution.split('x').map(Number);
+                videoCanvas.width = w;
+                videoCanvas.height = h;
+            }
+            resizeVideoCanvas();
+        }
+
+        let _frameSeq = 0;
+        let _nextDrawSeq = 1;
+        const _frameBuffer = {};
+        function displayFrame(b64) {
+            const seq = ++_frameSeq;
+            const img = new Image();
+            img.onload = () => {
+                _frameBuffer[seq] = img;
+                while (_frameBuffer[_nextDrawSeq]) {
+                    videoCtx.drawImage(_frameBuffer[_nextDrawSeq], 0, 0, videoCanvas.width, videoCanvas.height);
+                    delete _frameBuffer[_nextDrawSeq];
+                    _nextDrawSeq++;
                 }
             };
+            img.src = 'data:image/jpeg;base64,' + b64;
         }
 
-        function showWorldSelection(numWorlds) {
-            worldButtons.innerHTML = '';
-            for (let i = 0; i < numWorlds; i++) {
-                const btn = document.createElement('button');
-                btn.className = 'world-btn';
-                btn.innerHTML = `World ${i + 1}` +
-                    (i === 0 ? '<span class="world-btn-sub">host world</span>' : '');
-                btn.addEventListener('click', () => {
-                    selectedWorldId = i;
-                    ws.send(JSON.stringify({ type: 'select_world', world_id: i }));
-                    worldSelectOverlay.classList.add('hidden');
-                });
-                btn.addEventListener('touchstart', (e) => {
-                    e.preventDefault();
-                    selectedWorldId = i;
-                    ws.send(JSON.stringify({ type: 'select_world', world_id: i }));
-                    worldSelectOverlay.classList.add('hidden');
-                }, { passive: false });
-                worldButtons.appendChild(btn);
-            }
-            worldSelectOverlay.classList.remove('hidden');
-        }
+        function showCaption(text, color) {
+            clearTimeout(captionFadeTimer);
+            clearInterval(captionTypeTimer);
 
-        function sendVote(keyboard, mouse) {
-            if (ws?.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'vote', keyboard, mouse, name: playerName }));
-            }
-        }
+            captionText.textContent = '';
+            captionText.style.color = color || '#e0e0e0';
+            captionText.style.textShadow = `0 0 8px ${color || '#e0e0e0'}40, 0 1px 3px rgba(0,0,0,0.9)`;
+            captionText.className = 'caption-text visible';
 
-        // Touch/click handlers
-        document.querySelectorAll('.key:not(.empty)').forEach(el => {
-            function handleTap(e) {
-                e.preventDefault();
-                const key = el.dataset.key;
-                const type = el.dataset.type;
-                if (type === 'camera') {
-                    sendVote('q', key);
+            const fullText = text || '';
+            let charIdx = 0;
+            const cursor = document.createElement('span');
+            cursor.className = 'caption-cursor';
+            cursor.style.background = color || 'var(--accent)';
+            captionText.appendChild(cursor);
+
+            captionTypeTimer = setInterval(() => {
+                if (charIdx < fullText.length) {
+                    cursor.remove();
+                    captionText.insertAdjacentText('beforeend', fullText[charIdx]);
+                    captionText.appendChild(cursor);
+                    charIdx++;
                 } else {
-                    sendVote(key, 'u');
+                    clearInterval(captionTypeTimer);
+                    cursor.remove();
+                    captionFadeTimer = setTimeout(() => {
+                        captionText.className = 'caption-text fading';
+                    }, 4000);
                 }
+            }, 35);
+        }
+
+        function sendAction(keyboard, mouse) {
+            if (ws?.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'action', keyboard, mouse }));
             }
-            el.addEventListener('touchstart', handleTap, { passive: false });
-            el.addEventListener('click', handleTap);
+        }
+
+        function handleKeyTap(key, type) {
+            if (type === 'camera') {
+                lastMouse = key;
+                lastKeyboard = 'q';
+            } else {
+                lastKeyboard = key;
+                lastMouse = 'u';
+            }
+            sendAction(lastKeyboard, lastMouse);
+        }
+
+        function resizeVideoCanvas() {
+            const area = document.querySelector('.video-area');
+            if (!area) return;
+            const areaW = area.clientWidth;
+            const areaH = area.clientHeight;
+            const aspect = videoCanvas.width / videoCanvas.height;
+            let w, h;
+            if (areaW / areaH > aspect) {
+                h = areaH;
+                w = h * aspect;
+            } else {
+                w = areaW;
+                h = w / aspect;
+            }
+            videoCanvas.style.width = w + 'px';
+            videoCanvas.style.height = h + 'px';
+        }
+
+        window.addEventListener('resize', resizeVideoCanvas);
+
+        // Touch/click handlers for all keys
+        document.querySelectorAll('.key:not(.empty)').forEach(el => {
+            function handleTapEvent(e) {
+                e.preventDefault();
+                handleKeyTap(el.dataset.key, el.dataset.type);
+            }
+            el.addEventListener('touchstart', handleTapEvent, { passive: false });
+            el.addEventListener('click', handleTapEvent);
         });
 
         // Focus name input on load

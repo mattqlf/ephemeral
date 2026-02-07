@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "matrix-game-2.0"
+name = "ephemeral"
 version = "0.0.1"
 description = "An Open-Source, Real-Time, and Streaming Interactive World Model"
 readme = "README.md"
@@ -52,6 +52,7 @@ dependencies = [
   "google-genai",
   "httpx",
   "anthropic",
+  "modal",
 ]
 
 [tool.uv.sources]

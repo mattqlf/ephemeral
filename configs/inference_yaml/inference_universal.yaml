@@ -12,7 +12,7 @@ image_or_video_shape:
 - 15
 - 44
 - 80
-num_frame_per_block: 3
+num_frame_per_block: 4
 context_noise: 0
 mode: universal
 causal: true

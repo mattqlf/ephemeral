@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ephemeral — Technical Deep Dive</title>
+<style>
+  @font-face {
+    font-family: 'Pixel';
+    src: url('https://fonts.cdnfonts.com/s/75325/PressStart2P-Regular.woff') format('woff');
+  }
+
+  :root {
+    --bg: #0a0a0a;
+    --text: #e0e0e0;
+    --text-dim: #666;
+    --accent: #00d4aa;
+    --border: #1a1a1a;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Courier New', monospace;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  .deck { width: 100vw; height: 100vh; position: relative; }
+
+  .slide {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    padding: 8vh 10vw;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+
+  .slide.active { display: flex; opacity: 1; }
+
+  /* ── Slide background image (right-side panel) ── */
+  .slide-img {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 45%;
+    background-size: cover;
+    background-position: center;
+    opacity: 0.2;
+    pointer-events: none;
+    -webkit-mask-image: linear-gradient(to right, transparent 0%, rgba(0,0,0,0.4) 25%, rgba(0,0,0,1) 50%);
+    mask-image: linear-gradient(to right, transparent 0%, rgba(0,0,0,0.4) 25%, rgba(0,0,0,1) 50%);
+  }
+
+  /* ── Hero title slide ── */
+  .slide.hero {
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 0;
+  }
+
+  .hero-bg {
+    position: absolute;
+    inset: 0;
+    background: url('hero1.jpg') center center / contain no-repeat;
+    background-color: var(--bg);
+  }
+
+  .hero-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+  }
+
+  .hero-content {
+    position: relative;
+    z-index: 1;
+  }
+
+  .hero h1 {
+    font-family: 'Courier New', monospace;
+    font-size: clamp(1.8rem, 4vw, 3rem);
+    letter-spacing: 0.35em;
+    text-transform: uppercase;
+    color: var(--text);
+    font-weight: normal;
+  }
+
+  .hero .subtitle {
+    font-size: clamp(1rem, 2vw, 1.4rem);
+    color: rgba(224, 224, 224, 0.5);
+    max-width: 700px;
+    line-height: 1.6;
+    margin: 1.5rem auto 0;
+  }
+
+  .hero .tag {
+    margin-top: 3rem;
+    font-size: 13px;
+    color: rgba(224, 224, 224, 0.25);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+
+  /* ── Center title slides ── */
+  .slide.center {
+    align-items: center;
+    text-align: center;
+  }
+
+  .center h2 {
+    font-family: 'Pixel', 'Courier New', monospace;
+    font-size: clamp(1.4rem, 3.5vw, 2.4rem);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    line-height: 1.5;
+    margin-bottom: 1.5rem;
+  }
+
+  .center h2 .hl { color: var(--accent); }
+
+  .center p {
+    font-size: clamp(1rem, 1.8vw, 1.3rem);
+    color: var(--text-dim);
+    max-width: 750px;
+    line-height: 1.7;
+  }
+
+  /* ── Section label ── */
+  .label {
+    font-size: 13px;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    margin-bottom: 1.5rem;
+  }
+
+  /* ── Slide heading ── */
+  h2 {
+    font-family: 'Courier New', monospace;
+    font-size: clamp(1.5rem, 3vw, 2.2rem);
+    font-weight: normal;
+    line-height: 1.3;
+    margin-bottom: 2.5rem;
+  }
+
+  /* ── Bullet list ── */
+  ul {
+    list-style: none;
+    padding: 0;
+    max-width: 800px;
+  }
+
+  ul li {
+    padding: 0.6rem 0;
+    padding-left: 1.8rem;
+    position: relative;
+    font-size: clamp(1.05rem, 1.7vw, 1.3rem);
+    line-height: 1.7;
+    color: var(--text);
+  }
+
+  ul li::before {
+    content: '>';
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+    font-weight: bold;
+  }
+
+  ul li strong { color: #fff; }
+
+  .dim { color: var(--text-dim); }
+
+  /* ── Two columns ── */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 5vw;
+    width: 100%;
+  }
+
+  .col-label {
+    font-size: 14px;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .col-label.dim-label { color: var(--text-dim); }
+
+  /* ── Navigation ── */
+  .nav {
+    position: fixed;
+    bottom: 1.5rem;
+    right: 2rem;
+    display: flex;
+    gap: 4px;
+    z-index: 100;
+  }
+
+  .nav button {
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9rem;
+    font-family: 'Courier New', monospace;
+    transition: all 0.15s;
+  }
+
+  .nav button:hover { border-color: var(--accent); color: var(--accent); }
+
+  .progress {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    height: 2px;
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent);
+    transition: width 0.3s ease;
+    z-index: 100;
+  }
+
+  .counter {
+    position: fixed;
+    bottom: 1.7rem;
+    left: 2rem;
+    font-size: 13px;
+    color: #333;
+    letter-spacing: 0.05em;
+    z-index: 100;
+  }
+</style>
+</head>
+<body>
+
+<div class="deck" id="deck">
+
+  <!-- 1: Hero -->
+  <div class="slide hero active">
+    <div class="hero-bg"></div>
+    <div class="hero-overlay"></div>
+    <div class="hero-content">
+      <h1>Ephemeral</h1>
+      <p class="subtitle">A real-time interactive world model built on Wan 2.1 diffusion transformers</p>
+      <p class="tag">technical deep dive</p>
+    </div>
+  </div>
+
+  <!-- 2: Google Genie context -->
+  <div class="slide">
+    <div class="label">Context</div>
+    <h2>Google just shipped Project Genie</h2>
+    <ul>
+      <li>Powered by <strong>Genie 3</strong> &mdash; DeepMind's latest world model</li>
+      <li>Text or image in, interactive 3D world out &mdash; <strong>20&ndash;24 FPS at 720p</strong></li>
+      <li>Sessions <strong>hard-capped at 60 seconds</strong> <span class="dim">(compute cost)</span></li>
+      <li>Closed source, closed weights</li>
+      <li>Requires Google AI Ultra &mdash; <strong>$250/mo</strong>, U.S. only</li>
+    </ul>
+  </div>
+
+  <!-- 3: We made it open source -->
+  <div class="slide center">
+    <h2>We made it <span class="hl">open source</span></h2>
+    <p>Same idea. Open weights, open code, no subscription, no time limit. Run it on your own hardware.</p>
+    <div class="two-col" style="margin-top:3rem; max-width:800px;">
+      <div>
+        <div class="col-label dim-label">Project Genie</div>
+        <ul>
+          <li>Closed weights &amp; code</li>
+          <li>60-second session limit</li>
+          <li>$250/mo, U.S. only</li>
+          <li>720p, 20&ndash;24 FPS</li>
+        </ul>
+      </div>
+      <div>
+        <div class="col-label">Ephemeral</div>
+        <ul>
+          <li>Open weights &amp; code</li>
+          <li>No time limit</li>
+          <li>Run on your own GPUs</li>
+          <li>352&times;640, 25 FPS</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4: Three-stage pipeline -->
+  <div class="slide">
+    <div class="slide-img" style="background-image: url('hero3.jpg')"></div>
+    <div class="label">Architecture</div>
+    <h2>Three-stage pipeline</h2>
+    <ul>
+      <li><strong>Stage 1 &mdash; Foundation:</strong> Wan 2.1 (14B param image-to-video DiT), text conditioning removed, fine-tuned on visual dynamics</li>
+      <li><strong>Stage 2 &mdash; Action modules:</strong> injected into first 15 of 30 transformer blocks; trained on ~800h of action-annotated video</li>
+      <li><strong>Stage 3 &mdash; Causal distillation:</strong> bidirectional &rarr; causal streaming via Self-Forcing; 30 denoising steps &rarr; 3</li>
+    </ul>
+  </div>
+
+  <!-- 5: Wan 2.1 backbone -->
+  <div class="slide">
+    <div class="slide-img" style="background-image: url('hero4.jpg')"></div>
+    <div class="label">Foundation Model</div>
+    <h2>Wan 2.1 backbone</h2>
+    <ul>
+      <li><strong>3D Causal VAE:</strong> 8&times; spatial, 4&times; temporal compression &mdash; diffusion operates entirely in latent space</li>
+      <li><strong>DiT:</strong> 30-layer transformer with flow matching &mdash; learns a velocity field from noise to clean video</li>
+      <li>Text conditioning <strong>removed</strong> &mdash; forces visual/physical understanding over linguistic shortcuts</li>
+    </ul>
+  </div>
+
+  <!-- 6: Action module -->
+  <div class="slide">
+    <div class="label">Action Conditioning</div>
+    <h2>The action module</h2>
+    <ul>
+      <li><strong>Keyboard:</strong> discrete multi-hot vectors injected via cross-attention &mdash; movement control</li>
+      <li><strong>Mouse:</strong> continuous 2D camera deltas via MLP + temporal self-attention &mdash; camera rotation</li>
+      <li>Installed in <strong>first 15 of 30 blocks only</strong> &mdash; halves compute, negligible quality loss</li>
+    </ul>
+  </div>
+
+  <!-- 7: Causal distillation -->
+  <div class="slide">
+    <div class="slide-img" style="background-image: url('hero5.jpg')"></div>
+    <div class="label">Causal Distillation</div>
+    <h2>From bidirectional to streaming</h2>
+    <ul>
+      <li><strong>Problem:</strong> bidirectional attention &mdash; every frame sees the future. Incompatible with streaming.</li>
+      <li><strong>Self-Forcing:</strong> student trains on its own outputs, learning to handle its own imperfections</li>
+      <li><strong>Result:</strong> 30 denoising steps &rarr; 3, with streaming via KV-cache</li>
+    </ul>
+  </div>
+
+  <!-- 8: KV-cache -->
+  <div class="slide">
+    <div class="label">Causal Distillation</div>
+    <h2>KV-cache &amp; rolling memory</h2>
+    <ul>
+      <li><strong>Block-wise causal:</strong> bidirectional within each 3-frame block, strictly causal across blocks</li>
+      <li><strong>Rolling KV-cache:</strong> 6-frame window (~1 second) &mdash; oldest frames evicted as new ones arrive</li>
+      <li>Enables <strong>indefinite-length generation</strong> with bounded memory</li>
+    </ul>
+  </div>
+
+  <!-- 9: Pipeline — end to end -->
+  <div class="slide">
+    <div class="slide-img" style="background-image: url('hero2.jpg')"></div>
+    <div class="label">Pipeline</div>
+    <h2>From image to interactive world</h2>
+    <ul>
+      <li><strong>Input:</strong> single reference image &mdash; CLIP encodes semantic features, 3D VAE compresses to initial latent</li>
+      <li><strong>Each cycle:</strong> keyboard + mouse sent via WebSocket; embedded and injected into first 15 DiT blocks</li>
+      <li><strong>Generation:</strong> 3 frames in 3 denoising steps; KV-cache updated, oldest frames evicted</li>
+      <li><strong>Output:</strong> VAE decodes to RGB, frames to browser &mdash; <strong>120ms per block</strong> at 25 FPS</li>
+    </ul>
+  </div>
+
+</div>
+
+<div class="counter" id="counter">01 / 09</div>
+<div class="progress" id="progress" style="width: 11.1%"></div>
+<div class="nav">
+  <button onclick="prev()">&larr;</button>
+  <button onclick="next()">&rarr;</button>
+</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  let current = 0;
+
+  function show(n) {
+    slides[current].classList.remove('active');
+    current = Math.max(0, Math.min(n, slides.length - 1));
+    slides[current].classList.add('active');
+    document.getElementById('counter').textContent =
+      String(current + 1).padStart(2, '0') + ' / ' + String(slides.length).padStart(2, '0');
+    document.getElementById('progress').style.width =
+      ((current + 1) / slides.length * 100) + '%';
+  }
+
+  function next() { show(current + 1); }
+  function prev() { show(current - 1); }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); next(); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); prev(); }
+    if (e.key === 'Home') { e.preventDefault(); show(0); }
+    if (e.key === 'End') { e.preventDefault(); show(slides.length - 1); }
+  });
+
+  let touchStartX = 0;
+  document.addEventListener('touchstart', e => { touchStartX = e.touches[0].clientX; });
+  document.addEventListener('touchend', e => {
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    if (Math.abs(dx) > 50) dx > 0 ? prev() : next();
+  });
+</script>
+
+</body>
+</html>

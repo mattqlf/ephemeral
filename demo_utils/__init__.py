@@ -1,1 +1,1 @@
-"""Demo utilities for Matrix-Game."""
+"""Demo utilities for Ephemeral."""
