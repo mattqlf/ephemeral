@@ -35,7 +35,6 @@ import string
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from queue import Queue, Empty
 from typing import Optional
 
 def _elapsed():
@@ -92,15 +91,15 @@ suno_client: Optional[SunoClient] = None
 
 
 @dataclass
-class WorldState:
+class WorldRunner:
     world_id: int
-    kv_cache1: list = None
-    kv_cache_mouse: list = None
-    kv_cache_keyboard: list = None
-    crossattn_cache: list = None
-    vae_cache: list = None
+    device: torch.device
+    pipeline: "CausalInferenceStreamingPipeline"
+    action_queue: asyncio.Queue
+    # Per-run state (set during run_inference):
     conditional_dict: dict = None
-    current_start_frame: int = 0
+    vae_cache: list = None
+    noise: torch.Tensor = None
 
 
 @dataclass
@@ -166,17 +165,26 @@ class InferenceEngine:
 
     def __init__(self, args):
         self.args = args
-        self.device = torch.device("cuda")
         self.weight_dtype = torch.bfloat16
 
-        self.action_queue = asyncio.Queue()
+        # Per-world GPU devices
+        num_gpus = torch.cuda.device_count()
+        if args.num_worlds > 1 and args.num_worlds > num_gpus:
+            raise RuntimeError(
+                f"--num-worlds={args.num_worlds} requires {args.num_worlds} GPUs, "
+                f"only {num_gpus} available"
+            )
+        self.devices = [torch.device(f"cuda:{i}") for i in range(args.num_worlds)]
+        self.device = self.devices[0]  # primary device for shared ops (VAE encode, image processing)
+
         self.is_running = False
         self.should_stop = False
         self.num_worlds = args.num_worlds
-        self.worlds: list[WorldState] = []
+        self.worlds: list[WorldRunner] = []
+        self._ws_lock: asyncio.Lock = None  # lazy init, for thread-safe WebSocket sends
 
         logger.info(
-            "InferenceEngine init: checkpoint=%s pretrained=%s max_frames=%d resolution=%dx%d fast=%s no_compile=%s seed=%d",
+            "InferenceEngine init: checkpoint=%s pretrained=%s max_frames=%d resolution=%dx%d fast=%s no_compile=%s seed=%d num_worlds=%d devices=%s",
             args.checkpoint_path,
             args.pretrained_model_path,
             args.max_num_output_frames,
@@ -185,6 +193,8 @@ class InferenceEngine:
             getattr(args, 'fast', False),
             getattr(args, 'no_compile', False),
             args.seed,
+            args.num_worlds,
+            [str(d) for d in self.devices],
         )
 
         self._init_config()
@@ -236,11 +246,6 @@ class InferenceEngine:
         # Suppress FutureWarnings about weights_only
         warnings.filterwarnings("ignore", category=FutureWarning, message=".*weights_only.*")
 
-        # Initialize generator structure (no weights yet)
-        generator = WanDiffusionWrapper(
-            **getattr(self.config, "model_kwargs", {}), is_causal=True)
-        logger.info("Generator structure initialized")
-
         # Define loading functions for parallel execution
         def load_vae_decoder_weights():
             t0 = time.perf_counter()
@@ -285,40 +290,27 @@ class InferenceEngine:
         parallel_elapsed = time.perf_counter() - models_start
         logger.info("Parallel weight loading complete (%.2fs)", parallel_elapsed)
 
+        # Create an engine on each world's GPU
         gpu_start = time.perf_counter()
-        logger.info("Moving models to GPU (device=%s)...", self.device)
+        self.worlds = []
+        for i, device in enumerate(self.devices):
+            logger.info("Creating world %d engine on %s...", i, device)
+            pipeline = self._create_world_engine(device, decoder_state_dict, main_checkpoint)
+            world = WorldRunner(
+                world_id=i, device=device, pipeline=pipeline,
+                action_queue=asyncio.Queue())
+            self.worlds.append(world)
+            logger.info("World %d engine ready on %s", i, device)
 
-        # Initialize VAE decoder with loaded weights
-        current_vae_decoder = VAEDecoderWrapper()
-        current_vae_decoder.load_state_dict(decoder_state_dict)
-        current_vae_decoder.to(self.device, torch.float16)
-        current_vae_decoder.requires_grad_(False)
-        current_vae_decoder.eval()
-        if getattr(self.args, "no_compile", False):
-            logger.info("  Skipping VAE decoder compile (--no-compile). Using eager mode.")
-        else:
-            compile_start = time.perf_counter()
-            logger.info("  Compiling VAE decoder (this takes ~30s on first run)...")
-            current_vae_decoder.compile(mode="max-autotune-no-cudagraphs")
-            logger.info("  VAE decoder compiled (%.2fs)", time.perf_counter() - compile_start)
+        # Keep backward compat references (world 0 = primary)
+        self.pipeline = self.worlds[0].pipeline
 
-        # Initialize pipeline
-        pipeline = CausalInferenceStreamingPipeline(
-            self.config, generator=generator, vae_decoder=current_vae_decoder)
-
-        if main_checkpoint:
-            pipeline.generator.load_state_dict(main_checkpoint)
-            logger.info("  Main checkpoint applied to generator")
-
-        self.pipeline = pipeline.to(device=self.device, dtype=self.weight_dtype)
-        self.pipeline.vae_decoder.to(torch.float16)
-
-        # Move VAE encoder to GPU
+        # VAE encoder only on primary device (used for input image encoding)
         self.vae = vae_encoder.to(self.device, self.weight_dtype)
 
         gpu_elapsed = time.perf_counter() - gpu_start
         total_elapsed = time.perf_counter() - models_start
-        logger.info("Models loaded and moved to GPU (gpu=%.2fs, total=%.2fs)", gpu_elapsed, total_elapsed)
+        logger.info("All %d world engine(s) created (gpu=%.2fs, total=%.2fs)", len(self.worlds), gpu_elapsed, total_elapsed)
 
         # Warmup primarily exists to trigger compile paths ahead of first inference.
         if getattr(self.args, "no_compile", False):
@@ -330,44 +322,91 @@ class InferenceEngine:
 
         logger.info("TIP: Keep this server running to avoid reloading models.")
 
+    def _create_world_engine(self, device: torch.device, decoder_state_dict: dict,
+                             main_checkpoint: dict | None) -> CausalInferenceStreamingPipeline:
+        """Create a single inference pipeline on the specified device.
+
+        Follows the pattern from web_server_speculative._create_engine:
+        fresh model instances with deepcopied weights per GPU.
+        """
+        generator = WanDiffusionWrapper(
+            **getattr(self.config, "model_kwargs", {}), is_causal=True)
+
+        vae_decoder = VAEDecoderWrapper()
+        vae_decoder.load_state_dict(copy.deepcopy(decoder_state_dict))
+        vae_decoder.to(device, torch.float16)
+        vae_decoder.requires_grad_(False)
+        vae_decoder.eval()
+
+        if getattr(self.args, "no_compile", False):
+            logger.info("  Skipping VAE decoder compile on %s (--no-compile)", device)
+        else:
+            compile_start = time.perf_counter()
+            logger.info("  Compiling VAE decoder on %s...", device)
+            vae_decoder.compile(mode="max-autotune-no-cudagraphs")
+            logger.info("  VAE decoder compiled on %s (%.2fs)", device, time.perf_counter() - compile_start)
+
+        pipeline = CausalInferenceStreamingPipeline(
+            self.config, generator=generator, vae_decoder=vae_decoder)
+
+        if main_checkpoint:
+            pipeline.generator.load_state_dict(copy.deepcopy(main_checkpoint))
+            logger.info("  Main checkpoint applied to generator on %s", device)
+
+        pipeline = pipeline.to(device=device, dtype=self.weight_dtype)
+        pipeline.vae_decoder.to(torch.float16)
+
+        return pipeline
+
     def _warmup(self):
-        """Run complete warmup to trigger all torch.compile paths."""
+        """Run complete warmup on each world's pipeline to trigger all torch.compile paths."""
         warmup_start = time.perf_counter()
-        logger.info("Warming up (compiling all kernels)...")
+        logger.info("Warming up %d world(s) (compiling all kernels)...", len(self.worlds))
+        for world in self.worlds:
+            self._warmup_single(world)
+        warmup_elapsed = time.perf_counter() - warmup_start
+        logger.info("  Warmup complete! (total %.2fs)", warmup_elapsed)
 
-        num_frame_per_block = self.pipeline.num_frame_per_block
-        denoising_steps = self.pipeline.denoising_step_list
+    def _warmup_single(self, world: "WorldRunner"):
+        """Run warmup on a single world's pipeline."""
+        pipeline = world.pipeline
+        device = world.device
+        world_start = time.perf_counter()
+        logger.info("  Warming up world %d on %s...", world.world_id, device)
 
-        # Get actual visual_context shape from model
+        num_frame_per_block = pipeline.num_frame_per_block
+        denoising_steps = pipeline.denoising_step_list
+
+        # Get actual visual_context shape from model (use primary VAE encoder)
         logger.info("  Detecting tensor shapes...")
         test_image = torch.randn([1, 3, 1, self.res_height, self.res_width], device=self.device, dtype=self.weight_dtype)
         with torch.no_grad():
             visual_context_shape = self.vae.clip.encode_video(test_image).shape
         logger.info("    visual_context shape: %s", visual_context_shape)
 
-        # Create conditions for block 0 (simplest case - no KV cache complications)
+        # Create conditions for block 0
         max_output_frames = self.args.max_num_output_frames
         num_frames = (max_output_frames - 1) * 4 + 1
 
         full_cond_concat = torch.randn(
             [1, 20, max_output_frames, self.latent_h, self.latent_w],
-            device=self.device, dtype=self.weight_dtype
+            device=device, dtype=self.weight_dtype
         )
         full_visual_context = torch.randn(
             visual_context_shape,
-            device=self.device, dtype=self.weight_dtype
+            device=device, dtype=self.weight_dtype
         )
         full_keyboard = torch.zeros(
             [1, num_frames, 4],
-            device=self.device, dtype=self.weight_dtype
+            device=device, dtype=self.weight_dtype
         )
         full_mouse = torch.zeros(
             [1, num_frames, 2],
-            device=self.device, dtype=self.weight_dtype
+            device=device, dtype=self.weight_dtype
         )
         sampled_noise = torch.randn(
             [1, 16, max_output_frames, self.latent_h, self.latent_w],
-            device=self.device, dtype=self.weight_dtype
+            device=device, dtype=self.weight_dtype
         )
 
         full_conditional_dict = {
@@ -382,46 +421,45 @@ class InferenceEngine:
         noise_slice = sampled_noise[:, :, :num_frame_per_block]
 
         # Initialize caches fresh for block 0
-        self.pipeline._initialize_kv_cache(1, self.weight_dtype, self.device)
-        self.pipeline._initialize_kv_cache_mouse_and_keyboard(1, self.weight_dtype, self.device)
-        self.pipeline._initialize_crossattn_cache(1, self.weight_dtype, self.device)
+        pipeline._initialize_kv_cache(1, self.weight_dtype, device)
+        pipeline._initialize_kv_cache_mouse_and_keyboard(1, self.weight_dtype, device)
+        pipeline._initialize_crossattn_cache(1, self.weight_dtype, device)
 
         logger.info("  Running %d denoising steps + context pass...", len(denoising_steps))
 
         with torch.no_grad():
             output = noise_slice
 
-            # Run through all denoising timesteps to compile each one
             for step_idx, current_timestep in enumerate(denoising_steps):
                 step_start = time.perf_counter()
                 logger.info("    Step %d/%d (timestep=%d)...", step_idx + 1, len(denoising_steps), current_timestep)
-                timestep = torch.ones([1, num_frame_per_block], device=self.device, dtype=torch.int64) * current_timestep
+                timestep = torch.ones([1, num_frame_per_block], device=device, dtype=torch.int64) * current_timestep
 
-                denoised_pred, _ = self.pipeline.generator(
+                denoised_pred, _ = pipeline.generator(
                     noisy_image_or_video=output,
                     conditional_dict=cond,
                     timestep=timestep,
-                    kv_cache=self.pipeline.kv_cache1,
-                    kv_cache_mouse=self.pipeline.kv_cache_mouse,
-                    kv_cache_keyboard=self.pipeline.kv_cache_keyboard,
-                    crossattn_cache=self.pipeline.crossattn_cache,
+                    kv_cache=pipeline.kv_cache1,
+                    kv_cache_mouse=pipeline.kv_cache_mouse,
+                    kv_cache_keyboard=pipeline.kv_cache_keyboard,
+                    crossattn_cache=pipeline.crossattn_cache,
                     current_start=0
                 )
                 logger.info("    Step %d/%d done (%.2fs)", step_idx + 1, len(denoising_steps), time.perf_counter() - step_start)
                 output = denoised_pred
 
-            # Context pass (timestep=0) to compile that path too
+            # Context pass
             ctx_start = time.perf_counter()
-            logger.info("    Context pass (timestep=%s)...", self.pipeline.args.context_noise)
-            context_timestep = torch.ones([1, num_frame_per_block], device=self.device, dtype=torch.int64) * self.pipeline.args.context_noise
-            self.pipeline.generator(
+            logger.info("    Context pass (timestep=%s)...", pipeline.args.context_noise)
+            context_timestep = torch.ones([1, num_frame_per_block], device=device, dtype=torch.int64) * pipeline.args.context_noise
+            pipeline.generator(
                 noisy_image_or_video=output,
                 conditional_dict=cond,
                 timestep=context_timestep,
-                kv_cache=self.pipeline.kv_cache1,
-                kv_cache_mouse=self.pipeline.kv_cache_mouse,
-                kv_cache_keyboard=self.pipeline.kv_cache_keyboard,
-                crossattn_cache=self.pipeline.crossattn_cache,
+                kv_cache=pipeline.kv_cache1,
+                kv_cache_mouse=pipeline.kv_cache_mouse,
+                kv_cache_keyboard=pipeline.kv_cache_keyboard,
+                crossattn_cache=pipeline.crossattn_cache,
                 current_start=0
             )
             logger.info("    Context pass done (%.2fs)", time.perf_counter() - ctx_start)
@@ -431,19 +469,17 @@ class InferenceEngine:
             logger.info("  VAE decoder (empty cache)...")
             vae_cache = [None] * len(ZERO_VAE_CACHE)
             dummy_latent = output.transpose(1, 2)
-            _, vae_cache = self.pipeline.vae_decoder(dummy_latent.half(), *vae_cache)
+            _, vae_cache = pipeline.vae_decoder(dummy_latent.half(), *vae_cache)
             logger.info("  VAE decoder (empty cache) done (%.2fs)", time.perf_counter() - vae_start)
 
-            # VAE decoder - second with populated cache (different code path)
+            # VAE decoder - second with populated cache
             vae2_start = time.perf_counter()
             logger.info("  VAE decoder (populated cache)...")
-            _, vae_cache = self.pipeline.vae_decoder(dummy_latent.half(), *vae_cache)
+            _, vae_cache = pipeline.vae_decoder(dummy_latent.half(), *vae_cache)
             logger.info("  VAE decoder (populated cache) done (%.2fs)", time.perf_counter() - vae2_start)
 
-        # Clear CUDA cache
         torch.cuda.empty_cache()
-        warmup_elapsed = time.perf_counter() - warmup_start
-        logger.info("  Warmup complete! (total %.2fs)", warmup_elapsed)
+        logger.info("  World %d warmup done (%.2fs)", world.world_id, time.perf_counter() - world_start)
 
     def _resizecrop(self, image, th, tw):
         w, h = image.size
@@ -468,60 +504,6 @@ class InferenceEngine:
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
     @staticmethod
-    def _clone_kv_cache(cache_list):
-        """Deep-clone a list of 30 KV cache dicts (k, v, global_end_index, local_end_index)."""
-        return [
-            {
-                "k": d["k"].clone(),
-                "v": d["v"].clone(),
-                "global_end_index": d["global_end_index"].clone(),
-                "local_end_index": d["local_end_index"].clone(),
-            }
-            for d in cache_list
-        ]
-
-    @staticmethod
-    def _clone_crossattn_cache(cache_list):
-        """Deep-clone a list of 30 cross-attention cache dicts (k, v, is_init)."""
-        return [
-            {
-                "k": d["k"].clone(),
-                "v": d["v"].clone(),
-                "is_init": d["is_init"],
-            }
-            for d in cache_list
-        ]
-
-    @staticmethod
-    def _clone_conditional_dict(cond_dict):
-        """Clone the mutable parts of conditional_dict (keyboard_cond, mouse_cond).
-
-        cond_concat and visual_context are read-only and shared across worlds.
-        """
-        cloned = {
-            "cond_concat": cond_dict["cond_concat"],
-            "visual_context": cond_dict["visual_context"],
-            "keyboard_cond": cond_dict["keyboard_cond"].clone(),
-        }
-        if "mouse_cond" in cond_dict:
-            cloned["mouse_cond"] = cond_dict["mouse_cond"].clone()
-        return cloned
-
-    def _swap_caches_in(self, world: WorldState):
-        """Point pipeline caches at this world's caches (pointer swap, no copy)."""
-        self.pipeline.kv_cache1 = world.kv_cache1
-        self.pipeline.kv_cache_mouse = world.kv_cache_mouse
-        self.pipeline.kv_cache_keyboard = world.kv_cache_keyboard
-        self.pipeline.crossattn_cache = world.crossattn_cache
-
-    def _swap_caches_out(self, world: WorldState):
-        """Save pipeline cache pointers back to world (pointer swap, no copy)."""
-        world.kv_cache1 = self.pipeline.kv_cache1
-        world.kv_cache_mouse = self.pipeline.kv_cache_mouse
-        world.kv_cache_keyboard = self.pipeline.kv_cache_keyboard
-        world.crossattn_cache = self.pipeline.crossattn_cache
-
-    @staticmethod
     def _random_action():
         """Return a random action for uncontrolled worlds."""
         return {
@@ -530,11 +512,18 @@ class InferenceEngine:
         }
 
     async def _send_ws(self, websocket: WebSocket, payload: dict) -> bool:
-        """Best-effort websocket send that treats disconnects as normal stop events."""
+        """Best-effort websocket send that treats disconnects as normal stop events.
+
+        Thread-safe via asyncio.Lock — multiple concurrent world tasks may send
+        frames simultaneously.
+        """
+        if self._ws_lock is None:
+            self._ws_lock = asyncio.Lock()
         msg_type = payload.get("type", "unknown")
         client_label = _websocket_client_label(websocket)
         try:
-            await websocket.send_json(payload)
+            async with self._ws_lock:
+                await websocket.send_json(payload)
             return True
         except Exception as exc:
             self.should_stop = True
@@ -851,7 +840,7 @@ class InferenceEngine:
 
         All inputs are votes. In room mode, buffered votes are resolved by
         majority; if none buffered, block until the first vote arrives.
-        In solo mode, world 0 reads from action_queue; other worlds use random.
+        In solo mode, world 0 reads from its action_queue; other worlds use random.
 
         Handles solo<->room transitions via a sentinel pushed into action_queue
         when a room opens (see open_room handler).
@@ -864,7 +853,8 @@ class InferenceEngine:
             # ── Solo mode ──
             if rs is None or not rs.is_active:
                 if world_id == 0:
-                    action = await asyncio.wait_for(self.action_queue.get(), timeout=120.0)
+                    action = await asyncio.wait_for(
+                        self.worlds[0].action_queue.get(), timeout=120.0)
                     if action and action.get("_room_transition"):
                         continue  # Room just opened — re-enter loop in room mode
                     return action
@@ -910,8 +900,9 @@ class InferenceEngine:
             # Woke up from vote for a different world — loop back
             continue
 
-    def _parse_action(self, action_data: dict) -> dict:
+    def _parse_action(self, action_data: dict, device: torch.device = None) -> dict:
         """Parse action from WebSocket message to tensor format."""
+        device = device or self.device
         mode = self.mode
         CAM_VALUE = 0.1
 
@@ -927,17 +918,16 @@ class InferenceEngine:
                 "w": [1, 0, 0, 0], "s": [0, 1, 0, 0],
                 "a": [0, 0, 1, 0], "d": [0, 0, 0, 1], "q": [0, 0, 0, 0]
             }
-            mouse_cond = torch.tensor(CAMERA_VALUE_MAP.get(mouse_key, [0, 0])).cuda()
-            keyboard_cond = torch.tensor(KEYBOARD_IDX.get(keyboard_key, [0, 0, 0, 0])).cuda()
+            mouse_cond = torch.tensor(CAMERA_VALUE_MAP.get(mouse_key, [0, 0]), device=device)
+            keyboard_cond = torch.tensor(KEYBOARD_IDX.get(keyboard_key, [0, 0, 0, 0]), device=device)
 
         elif mode == "gta_drive":
             CAMERA_VALUE_MAP = {
                 "a": [0, -CAM_VALUE], "d": [0, CAM_VALUE], "q": [0, 0]
             }
             KEYBOARD_IDX = {"w": [1, 0], "s": [0, 1], "q": [0, 0]}
-            # For GTA, steering (a/d) affects both mouse and movement
-            mouse_cond = torch.tensor(CAMERA_VALUE_MAP.get(keyboard_key, [0, 0])).cuda()
-            keyboard_cond = torch.tensor(KEYBOARD_IDX.get(keyboard_key, [0, 0])).cuda()
+            mouse_cond = torch.tensor(CAMERA_VALUE_MAP.get(keyboard_key, [0, 0]), device=device)
+            keyboard_cond = torch.tensor(KEYBOARD_IDX.get(keyboard_key, [0, 0]), device=device)
 
         else:  # templerun
             KEYBOARD_IDX = {
@@ -946,7 +936,7 @@ class InferenceEngine:
                 "z": [0, 0, 0, 1, 0, 0, 0], "c": [0, 0, 0, 0, 1, 0, 0],
                 "q": [1, 0, 0, 0, 0, 0, 0]
             }
-            keyboard_cond = torch.tensor(KEYBOARD_IDX.get(keyboard_key, [1, 0, 0, 0, 0, 0, 0])).cuda()
+            keyboard_cond = torch.tensor(KEYBOARD_IDX.get(keyboard_key, [1, 0, 0, 0, 0, 0, 0]), device=device)
             mouse_cond = None
 
         result = {"keyboard": keyboard_cond}
@@ -972,16 +962,17 @@ class InferenceEngine:
         self.is_running = True
         self.should_stop = False
 
-        # Clear any pending actions
-        dropped_actions = 0
-        while not self.action_queue.empty():
-            try:
-                self.action_queue.get_nowait()
-                dropped_actions += 1
-            except Exception:
-                break
-        if dropped_actions:
-            logger.info("[UI %s] Cleared %d stale queued actions before start", client_label, dropped_actions)
+        # Clear any pending actions from all world queues
+        for world in self.worlds:
+            dropped = 0
+            while not world.action_queue.empty():
+                try:
+                    world.action_queue.get_nowait()
+                    dropped += 1
+                except Exception:
+                    break
+            if dropped:
+                logger.info("[UI %s] Cleared %d stale queued actions from world %d", client_label, dropped, world.world_id)
 
         try:
             image_source = "upload" if (img_input and img_input.startswith("data:image")) else ("path" if img_input else "none")
@@ -997,21 +988,18 @@ class InferenceEngine:
             image = None
             if img_input:
                 if img_input.startswith('data:image'):
-                    # Handle base64 uploaded image
                     logger.info("[UI %s] Processing uploaded image (~%d KB base64)", client_label, len(img_input) // 1024)
                     header, b64_data = img_input.split(',', 1)
                     img_bytes = base64.b64decode(b64_data)
                     image = Image.open(io.BytesIO(img_bytes)).convert('RGB')
                     logger.info("[UI %s] Uploaded image size=%s", client_label, image.size)
                 else:
-                    # Handle file path
                     logger.info("[UI %s] Loading image from path=%s", client_label, img_input)
                     image = load_image(img_input)
 
             # Store for music generation immediately (captcha token may arrive any time)
-            # Music gen runs in parallel with Gemini — doesn't need the Gemini-generated image
             self._music_prompt = prompt or ""
-            self._music_image = image  # uploaded image or None; good enough for Anthropic music prompt
+            self._music_image = image
 
             # Generate image with Gemini if prompt provided
             if prompt:
@@ -1029,10 +1017,10 @@ class InferenceEngine:
                     "data": base64.b64encode(buf.getvalue()).decode()
                 })
 
+            # Encode on primary device
             image_tensor = self.frame_process(image)[None, :, None, :, :].to(
                 dtype=self.weight_dtype, device=self.device)
 
-            # Encode input image
             max_output_frames = self.args.max_num_output_frames
             logger.info("[UI %s] VAE encoding input image (max_output_frames=%d)...", client_label, max_output_frames)
             vae_encode_start = time.perf_counter()
@@ -1058,7 +1046,7 @@ class InferenceEngine:
 
             num_frames = (max_output_frames - 1) * 4 + 1
 
-            # Setup conditions
+            # Setup conditions (on primary device)
             logger.info("[UI %s] Setting up conditions (mode=%s, num_frames=%d)...", client_label, self.mode, num_frames)
             conditional_dict = {
                 "cond_concat": cond_concat.to(device=self.device, dtype=self.weight_dtype),
@@ -1083,6 +1071,19 @@ class InferenceEngine:
             conditional_dict['keyboard_cond'] = keyboard_condition
             logger.info("[UI %s] Conditions ready (keys=%s)", client_label, list(conditional_dict.keys()))
 
+            # Copy tensors to each world's device
+            for world in self.worlds:
+                dev = world.device
+                world.conditional_dict = {
+                    "cond_concat": conditional_dict["cond_concat"].to(dev),
+                    "visual_context": conditional_dict["visual_context"].to(dev),
+                    "keyboard_cond": conditional_dict["keyboard_cond"].clone().to(dev),
+                }
+                if "mouse_cond" in conditional_dict:
+                    world.conditional_dict["mouse_cond"] = conditional_dict["mouse_cond"].clone().to(dev)
+                world.noise = sampled_noise.clone().to(dev)
+                world.vae_cache = [None] * len(ZERO_VAE_CACHE)
+
             # Send ready signal first so frontend can set up the multi-world grid
             if not await self._send_ws(websocket, {
                 "type": "ready",
@@ -1104,15 +1105,21 @@ class InferenceEngine:
                     "world_id": w_id,
                 }):
                     return
-            logger.info("[UI %s] Ready; waiting for interactive actions", client_label)
+            logger.info("[UI %s] Ready; launching %d independent world loop(s)", client_label, self.num_worlds)
 
-            # Run inference loop
+            # Launch N concurrent world tasks
             with torch.no_grad():
-                await self._inference_loop(
-                    noise=sampled_noise,
-                    conditional_dict=conditional_dict,
-                    websocket=websocket
-                )
+                tasks = [
+                    asyncio.create_task(self._world_inference_loop(world, websocket))
+                    for world in self.worlds
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.exception("[UI %s] World %d loop failed: %s", client_label, i, result)
+
+            # Send completion
+            await self._send_ws(websocket, {"type": "complete"})
 
         except Exception as e:
             if self.should_stop:
@@ -1126,241 +1133,190 @@ class InferenceEngine:
             elapsed = time.perf_counter() - run_started_at
             logger.info("[UI %s] Inference session ended after %.2fs", client_label, elapsed)
 
-    async def _inference_loop(
-        self,
-        noise: torch.Tensor,
-        conditional_dict: dict,
-        websocket: WebSocket
-    ):
-        """Custom inference loop that streams frames via WebSocket.
+    async def _world_inference_loop(self, world: "WorldRunner", websocket: WebSocket):
+        """Independent inference loop for a single world on its own GPU.
 
-        Supports N parallel worlds via interleaved inference. Each world maintains
-        independent KV caches, VAE caches, and conditional dicts. Per tick, all worlds
-        are processed sequentially (cache swap by pointer reassignment).
+        Each world runs this concurrently. GPU work is dispatched via
+        run_in_executor so worlds on different GPUs execute in true parallel.
         """
-        batch_size, num_channels, num_frames, height, width = noise.shape
-        num_frame_per_block = self.pipeline.num_frame_per_block
-        num_worlds = self.num_worlds
+        pipeline = world.pipeline
+        device = world.device
+        w_id = world.world_id
+        noise = world.noise
+
+        batch_size = noise.shape[0]
+        num_frames = noise.shape[2]
+        num_frame_per_block = pipeline.num_frame_per_block
 
         num_blocks = num_frames // num_frame_per_block
         max_blocks = self.args.max_blocks or num_blocks
         total_blocks = min(max_blocks, num_blocks)
         client_label = _websocket_client_label(websocket)
         loop_started_at = time.perf_counter()
+
         logger.info(
-            "[UI %s] Entering generation loop blocks=%d frames_per_block=%d denoise_steps=%s num_worlds=%d",
-            client_label,
-            total_blocks,
-            num_frame_per_block,
-            self.pipeline.denoising_step_list,
-            num_worlds,
+            "[UI %s] World %d starting loop on %s (blocks=%d, denoise_steps=%s)",
+            client_label, w_id, device, total_blocks, pipeline.denoising_step_list,
         )
 
-        output = torch.zeros_like(noise)
-
-        # Initialize KV caches
-        logger.info("[UI %s] Initializing KV caches (batch=%d, dtype=%s, device=%s)...", client_label, batch_size, noise.dtype, noise.device)
-        kv_start = time.perf_counter()
-        self.pipeline.kv_cache1 = None
-        self.pipeline.kv_cache_keyboard = None
-        self.pipeline.kv_cache_mouse = None
-        self.pipeline.crossattn_cache = None
-
-        self.pipeline._initialize_kv_cache(batch_size, noise.dtype, noise.device)
-        self.pipeline._initialize_kv_cache_mouse_and_keyboard(batch_size, noise.dtype, noise.device)
-        self.pipeline._initialize_crossattn_cache(batch_size, noise.dtype, noise.device)
-        logger.info("[UI %s] KV caches initialized (%.2fs)", client_label, time.perf_counter() - kv_start)
-
-        # Initialize N worlds from the initial cache state
-        logger.info("[UI %s] Creating %d world(s) from initial caches...", client_label, num_worlds)
-        self.worlds = []
-        for w_id in range(num_worlds):
-            world = WorldState(world_id=w_id)
-            world.kv_cache1 = self._clone_kv_cache(self.pipeline.kv_cache1)
-            world.kv_cache_mouse = self._clone_kv_cache(self.pipeline.kv_cache_mouse)
-            world.kv_cache_keyboard = self._clone_kv_cache(self.pipeline.kv_cache_keyboard)
-            world.crossattn_cache = self._clone_crossattn_cache(self.pipeline.crossattn_cache)
-            world.conditional_dict = self._clone_conditional_dict(conditional_dict)
-            world.vae_cache = [None] * len(ZERO_VAE_CACHE)
-            self.worlds.append(world)
-        logger.info("[UI %s] %d world(s) initialized", client_label, num_worlds)
+        # Initialize KV caches on this world's device
+        pipeline.kv_cache1 = None
+        pipeline.kv_cache_keyboard = None
+        pipeline.kv_cache_mouse = None
+        pipeline.crossattn_cache = None
+        pipeline._initialize_kv_cache(batch_size, noise.dtype, device)
+        pipeline._initialize_kv_cache_mouse_and_keyboard(batch_size, noise.dtype, device)
+        pipeline._initialize_crossattn_cache(batch_size, noise.dtype, device)
 
         current_start_frame = 0
         generated_blocks = 0
 
-        # Main generation loop
         for block_index in range(total_blocks):
             if self.should_stop:
-                logger.info("[UI %s] Stop flag set before block %d", client_label, block_index + 1)
+                logger.info("[UI %s] World %d stop flag set before block %d", client_label, w_id, block_index + 1)
                 break
+
             block_started_at = time.perf_counter()
             block_num = block_index + 1
 
-            # Request action from client (for world 0 — host world)
-            if not await self._send_ws(websocket, {
+            # Send request_action with world_id
+            await self._send_ws(websocket, {
                 "type": "request_action",
                 "block": block_num,
-                "mode": self.mode
-            }):
-                return
+                "mode": self.mode,
+                "world_id": w_id,
+            })
 
-            # Wait for host action (world 0) — this is the blocking wait
+            # Wait for action from this world's queue
             try:
-                action_wait_started_at = time.perf_counter()
-                host_action = await self._get_next_action(world_id=0)
-                if host_action is None:
-                    logger.info("[UI %s] Block %d received stop sentinel", client_label, block_num)
+                action = await self._get_next_action(world_id=w_id)
+                if action is None:
+                    logger.info("[UI %s] World %d block %d received stop sentinel", client_label, w_id, block_num)
                     break
-                action_wait_ms = (time.perf_counter() - action_wait_started_at) * 1000.0
-                logger.info(
-                    "[UI %s] Block %d host action received in %.1fms (%s)",
-                    client_label, block_num, action_wait_ms,
-                    _summarize_action_payload(host_action),
-                )
             except asyncio.TimeoutError:
-                host_action = {"keyboard": "q", "mouse": "u"}
-                logger.warning("[UI %s] Block %d action timeout; using neutral action", client_label, block_num)
+                action = {"keyboard": "q", "mouse": "u"}
+                logger.warning("[UI %s] World %d block %d action timeout; using neutral", client_label, w_id, block_num)
 
-            # Process each world sequentially
-            world_last_frames = {}
-            for w_id in range(num_worlds):
-                world = self.worlds[w_id]
+            # Run GPU work in thread executor (allows other worlds to proceed)
+            loop = asyncio.get_event_loop()
+            video_np, world.vae_cache, world.conditional_dict = await loop.run_in_executor(
+                None, self._run_block_sync, world, current_start_frame, action)
 
-                # Get action: host action for world 0, non-blocking for others
-                if w_id == 0:
-                    action = host_action
-                else:
-                    action = await self._get_next_action(world_id=w_id)
-                    if action is None:
-                        action = self._random_action()
+            # Send frames
+            for frame_idx, frame in enumerate(video_np):
+                if not await self._send_ws(websocket, {
+                    "type": "frame",
+                    "data": self._frame_to_base64(frame),
+                    "block": block_num,
+                    "frame": frame_idx,
+                    "world_id": w_id,
+                }):
+                    return
+                await asyncio.sleep(0.01)
 
-                current_actions = self._parse_action(action)
-
-                # Swap this world's caches into the pipeline
-                self._swap_caches_in(world)
-
-                # Prepare noisy input (shared noise tensor, same slice for all worlds)
-                noisy_input = noise[:, :, current_start_frame:current_start_frame + num_frame_per_block]
-
-                # Apply action to this world's conditional dict (mutates keyboard_cond/mouse_cond)
-                new_act, world.conditional_dict = cond_current(
-                    world.conditional_dict, current_start_frame, num_frame_per_block,
-                    replace=current_actions, mode=self.mode)
-
-                # Denoising loop
-                for index, current_timestep in enumerate(self.pipeline.denoising_step_list):
-                    timestep = torch.ones(
-                        [batch_size, num_frame_per_block],
-                        device=noise.device, dtype=torch.int64) * current_timestep
-
-                    if index < len(self.pipeline.denoising_step_list) - 1:
-                        _, denoised_pred = self.pipeline.generator(
-                            noisy_image_or_video=noisy_input,
-                            conditional_dict=new_act,
-                            timestep=timestep,
-                            kv_cache=self.pipeline.kv_cache1,
-                            kv_cache_mouse=self.pipeline.kv_cache_mouse,
-                            kv_cache_keyboard=self.pipeline.kv_cache_keyboard,
-                            crossattn_cache=self.pipeline.crossattn_cache,
-                            current_start=current_start_frame * self.pipeline.frame_seq_length
-                        )
-                        next_timestep = self.pipeline.denoising_step_list[index + 1]
-                        noisy_input = self.pipeline.scheduler.add_noise(
-                            rearrange(denoised_pred, 'b c f h w -> (b f) c h w'),
-                            torch.randn_like(rearrange(denoised_pred, 'b c f h w -> (b f) c h w')),
-                            next_timestep * torch.ones(
-                                [batch_size * num_frame_per_block], device=noise.device, dtype=torch.long)
-                        )
-                        noisy_input = rearrange(noisy_input, '(b f) c h w -> b c f h w', b=denoised_pred.shape[0])
-                    else:
-                        _, denoised_pred = self.pipeline.generator(
-                            noisy_image_or_video=noisy_input,
-                            conditional_dict=new_act,
-                            timestep=timestep,
-                            kv_cache=self.pipeline.kv_cache1,
-                            kv_cache_mouse=self.pipeline.kv_cache_mouse,
-                            kv_cache_keyboard=self.pipeline.kv_cache_keyboard,
-                            crossattn_cache=self.pipeline.crossattn_cache,
-                            current_start=current_start_frame * self.pipeline.frame_seq_length
-                        )
-
-                # Context pass (update KV cache with clean context)
-                context_timestep = torch.ones_like(timestep) * self.pipeline.args.context_noise
-                self.pipeline.generator(
-                    noisy_image_or_video=denoised_pred,
-                    conditional_dict=new_act,
-                    timestep=context_timestep,
-                    kv_cache=self.pipeline.kv_cache1,
-                    kv_cache_mouse=self.pipeline.kv_cache_mouse,
-                    kv_cache_keyboard=self.pipeline.kv_cache_keyboard,
-                    crossattn_cache=self.pipeline.crossattn_cache,
-                    current_start=current_start_frame * self.pipeline.frame_seq_length,
-                )
-
-                # Swap caches back out to world
-                self._swap_caches_out(world)
-
-                # VAE decode with this world's own vae_cache
-                denoised_pred_t = denoised_pred.transpose(1, 2)
-                video, world.vae_cache = self.pipeline.vae_decoder(denoised_pred_t.half(), *world.vae_cache)
-
-                video_np = rearrange(video, "B T C H W -> B T H W C")
-                video_np = ((video_np.float() + 1) * 127.5).clip(0, 255).cpu().numpy().astype(np.uint8)[0]
-
-                # Send each frame tagged with world_id
-                for frame_idx, frame in enumerate(video_np):
-                    if not await self._send_ws(websocket, {
-                        "type": "frame",
-                        "data": self._frame_to_base64(frame),
-                        "block": block_num,
-                        "frame": frame_idx,
-                        "world_id": w_id,
-                    }):
-                        return
-                    await asyncio.sleep(0.01)  # pacing per frame
-
-                # Capture each world's last frame for captioning
-                world_last_frames[w_id] = video_np[-1]
-
-                if num_worlds > 1:
-                    logger.info("[UI %s] Block %d world %d done (%s)", client_label, block_num, w_id, _summarize_action_payload(action))
-
-            # Record output from last world processed (for compatibility)
-            output[:, :, current_start_frame:current_start_frame + num_frame_per_block] = denoised_pred
-
-            # Shared current_start_frame advances once per tick (all worlds stay in sync)
             current_start_frame += num_frame_per_block
             generated_blocks += 1
 
-            # Caption for each world every 3 blocks (all fire concurrently)
+            # Caption every 3 blocks
             if block_num % 3 == 1:
-                for w_id, last_frame in world_last_frames.items():
-                    asyncio.create_task(self._generate_caption(last_frame, block_num, websocket, world_id=w_id))
+                asyncio.create_task(self._generate_caption(video_np[-1], block_num, websocket, world_id=w_id))
 
             block_elapsed = time.perf_counter() - block_started_at
-            logger.info(
-                "[UI %s] Block %d complete worlds=%d elapsed=%.2fs",
-                client_label, block_num, num_worlds, block_elapsed,
-            )
+            logger.info("[UI %s] World %d block %d done (%.2fs)", client_label, w_id, block_num, block_elapsed)
 
-            # Send block complete
-            if not await self._send_ws(websocket, {
+            # Send block complete per world
+            await self._send_ws(websocket, {
                 "type": "block_complete",
-                "block": block_num
-            }):
-                return
+                "block": block_num,
+                "world_id": w_id,
+            })
 
-        # Send completion
-        if not await self._send_ws(websocket, {"type": "complete"}):
-            return
         total_elapsed = time.perf_counter() - loop_started_at
         logger.info(
-            "[UI %s] Generation loop finished blocks=%d/%d elapsed=%.2fs",
-            client_label,
-            generated_blocks,
-            total_blocks,
-            total_elapsed,
+            "[UI %s] World %d loop finished blocks=%d/%d elapsed=%.2fs",
+            client_label, w_id, generated_blocks, total_blocks, total_elapsed,
         )
+
+    def _run_block_sync(self, world: "WorldRunner", current_start_frame: int,
+                        action: dict) -> tuple:
+        """Synchronous GPU work for one block of one world.
+
+        Called from thread pool via run_in_executor. Returns (video_np, vae_cache, conditional_dict).
+        """
+        pipeline = world.pipeline
+        device = world.device
+        noise = world.noise
+        conditional_dict = world.conditional_dict
+        vae_cache = world.vae_cache
+
+        num_frame_per_block = pipeline.num_frame_per_block
+        batch_size = noise.shape[0]
+
+        current_actions = self._parse_action(action, device=device)
+        noisy_input = noise[:, :, current_start_frame:current_start_frame + num_frame_per_block]
+
+        new_act, conditional_dict = cond_current(
+            conditional_dict, current_start_frame, num_frame_per_block,
+            replace=current_actions, mode=self.mode)
+
+        # Denoising loop
+        for index, current_timestep in enumerate(pipeline.denoising_step_list):
+            timestep = torch.ones(
+                [batch_size, num_frame_per_block],
+                device=device, dtype=torch.int64) * current_timestep
+
+            if index < len(pipeline.denoising_step_list) - 1:
+                _, denoised_pred = pipeline.generator(
+                    noisy_image_or_video=noisy_input,
+                    conditional_dict=new_act,
+                    timestep=timestep,
+                    kv_cache=pipeline.kv_cache1,
+                    kv_cache_mouse=pipeline.kv_cache_mouse,
+                    kv_cache_keyboard=pipeline.kv_cache_keyboard,
+                    crossattn_cache=pipeline.crossattn_cache,
+                    current_start=current_start_frame * pipeline.frame_seq_length
+                )
+                next_timestep = pipeline.denoising_step_list[index + 1]
+                noisy_input = pipeline.scheduler.add_noise(
+                    rearrange(denoised_pred, 'b c f h w -> (b f) c h w'),
+                    torch.randn_like(rearrange(denoised_pred, 'b c f h w -> (b f) c h w')),
+                    next_timestep * torch.ones(
+                        [batch_size * num_frame_per_block], device=device, dtype=torch.long)
+                )
+                noisy_input = rearrange(noisy_input, '(b f) c h w -> b c f h w', b=denoised_pred.shape[0])
+            else:
+                _, denoised_pred = pipeline.generator(
+                    noisy_image_or_video=noisy_input,
+                    conditional_dict=new_act,
+                    timestep=timestep,
+                    kv_cache=pipeline.kv_cache1,
+                    kv_cache_mouse=pipeline.kv_cache_mouse,
+                    kv_cache_keyboard=pipeline.kv_cache_keyboard,
+                    crossattn_cache=pipeline.crossattn_cache,
+                    current_start=current_start_frame * pipeline.frame_seq_length
+                )
+
+        # Context pass
+        context_timestep = torch.ones_like(timestep) * pipeline.args.context_noise
+        pipeline.generator(
+            noisy_image_or_video=denoised_pred,
+            conditional_dict=new_act,
+            timestep=context_timestep,
+            kv_cache=pipeline.kv_cache1,
+            kv_cache_mouse=pipeline.kv_cache_mouse,
+            kv_cache_keyboard=pipeline.kv_cache_keyboard,
+            crossattn_cache=pipeline.crossattn_cache,
+            current_start=current_start_frame * pipeline.frame_seq_length,
+        )
+
+        # VAE decode
+        denoised_pred_t = denoised_pred.transpose(1, 2)
+        video, vae_cache = pipeline.vae_decoder(denoised_pred_t.half(), *vae_cache)
+
+        video_np = rearrange(video, "B T C H W -> B T H W C")
+        video_np = ((video_np.float() + 1) * 127.5).clip(0, 255).cpu().numpy().astype(np.uint8)[0]
+
+        return video_np, vae_cache, conditional_dict
 
     def stop(self):
         """Stop the inference loop."""
@@ -1606,13 +1562,13 @@ async def websocket_endpoint(websocket: WebSocket):
                         room_state.vote_event.set()
                         await _send_action_feed("Host", kb, ms)
                     else:
-                        # Solo mode: direct to action_queue
-                        await inference_engine.action_queue.put(data)
+                        # Solo mode: direct to world 0's action_queue
+                        await inference_engine.worlds[0].action_queue.put(data)
                         logger.info(
                             "[WS %s] Queued action (%s) queue_size=%d",
                             client_label,
                             _summarize_action_payload(data),
-                            inference_engine.action_queue.qsize(),
+                            inference_engine.worlds[0].action_queue.qsize(),
                         )
                 else:
                     logger.warning("[WS %s] Dropped action: inference is not running", client_label)
@@ -1625,7 +1581,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     room_state = RoomState(room_id=rid, host_ws=websocket)
                     # Unblock _get_next_action if it's waiting on action_queue in solo mode
                     if inference_engine and inference_engine.is_running:
-                        await inference_engine.action_queue.put({"_room_transition": True})
+                        await inference_engine.worlds[0].action_queue.put({"_room_transition": True})
                     lan_ip = _get_lan_ip()
                     url = f"http://{lan_ip}:{server_port}/room/{rid}"
                     logger.info("[WS %s] Room opened: %s -> %s", client_label, rid, url)
@@ -1647,7 +1603,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     if room_state and room_state.host_ws == websocket:
                         await _close_room()
                     inference_engine.stop()
-                    await inference_engine.action_queue.put(None)
+                    for w in inference_engine.worlds:
+                        await w.action_queue.put(None)
                     await websocket.send_json({"type": "stopped"})
             else:
                 logger.warning("[WS %s] Unknown message type=%s", client_label, msg_type)
@@ -1658,14 +1615,16 @@ async def websocket_endpoint(websocket: WebSocket):
             await _close_room()
         if inference_engine:
             inference_engine.stop()
-            await inference_engine.action_queue.put(None)
+            for w in inference_engine.worlds:
+                await w.action_queue.put(None)
     except Exception as e:
         logger.exception("[WS %s] WebSocket error", client_label)
         if room_state and room_state.host_ws == websocket:
             await _close_room()
         if inference_engine:
             inference_engine.stop()
-            await inference_engine.action_queue.put(None)
+            for w in inference_engine.worlds:
+                await w.action_queue.put(None)
 
 
 def parse_args():
@@ -1692,8 +1651,8 @@ def parse_args():
     parser.add_argument("--true-no-compile", action="store_true",
                         help="Disable ALL torch.compile including flex_attention. Implies --no-compile and --no-warmup. "
                              "Near-instant startup but significantly slower inference (~2-4x)")
-    parser.add_argument("--num-worlds", type=int, default=1, choices=[1, 2, 4],
-                        help="Number of parallel worlds (1, 2, or 4). Each runs at 1/N frame rate.")
+    parser.add_argument("--num-worlds", type=int, default=1,
+                        help="Number of parallel worlds. Each world runs independently on its own GPU.")
     args = parser.parse_args()
 
     # Parse resolution
