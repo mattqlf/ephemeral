@@ -17,8 +17,26 @@ from diffusers.models.modeling_utils import ModelMixin
 import torch.nn as nn
 import torch
 import math
+import time as _time
 import torch.distributed as dist
 from .action_module import ActionModule
+
+_causal_attn_first_call = [True]
+
+
+def _log_first_flex(label, flag, *args, **kwargs):
+    """Wrap flex_attention with timing on first call to surface kernel compilation."""
+    if flag[0]:
+        flag[0] = False
+        print(f"[attention] {label}: autotuning kernel (this may take several minutes)...")
+        torch.cuda.synchronize()
+        t0 = _time.perf_counter()
+        result = flex_attention(*args, **kwargs)
+        torch.cuda.synchronize()
+        elapsed = _time.perf_counter() - t0
+        print(f"[attention] {label}: done ({elapsed:.1f}s)")
+        return result
+    return flex_attention(*args, **kwargs)
 
 # wan 1.3B model has a weird channel / head configurations and require max-autotune to work with flexattention
 # see https://github.com/pytorch/pytorch/issues/133254
@@ -146,7 +164,8 @@ class CausalWanSelfAttention(nn.Module):
                 dim=1
             )
 
-            x = flex_attention(
+            x = _log_first_flex(
+                "causal self-attention", _causal_attn_first_call,
                 query=padded_roped_query.transpose(2, 1), # after: B, HW, F, C
                 key=padded_roped_key.transpose(2, 1),
                 value=padded_v.transpose(2, 1),

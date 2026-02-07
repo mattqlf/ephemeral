@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 from .posemb_layers import apply_rotary_emb, get_nd_rotary_pos_embed
 import math
+import time as _time
 from torch.nn.attention.flex_attention import flex_attention
 
 try:
@@ -23,7 +24,26 @@ else:
     flex_attention = torch.compile(
         flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
     print("[compile] flex_attention (action_module) compiled.")
-    
+
+_mouse_attn_first_call = [True]
+_kbd_attn_rope_first_call = [True]
+_kbd_attn_norope_first_call = [True]
+
+
+def _log_first_flex(label, flag, *args, **kwargs):
+    """Wrap flex_attention with timing on first call to surface kernel compilation."""
+    if flag[0]:
+        flag[0] = False
+        print(f"[attention] {label}: autotuning kernel (this may take several minutes)...")
+        torch.cuda.synchronize()
+        t0 = _time.perf_counter()
+        result = flex_attention(*args, **kwargs)
+        torch.cuda.synchronize()
+        elapsed = _time.perf_counter() - t0
+        print(f"[attention] {label}: done ({elapsed:.1f}s)")
+        return result
+    return flex_attention(*args, **kwargs)
+
 
 class WanRMSNorm(nn.Module):
     def __init__(self, dim, eps=1e-5):
@@ -272,7 +292,8 @@ class ActionModule(nn.Module):
                                         device=v.device, dtype=v.dtype)],
                         dim=1
                     )
-                    attn = flex_attention(
+                    attn = _log_first_flex(
+                        "mouse attention", _mouse_attn_first_call,
                         query=padded_q.transpose(2, 1), # after: B, HW, F, C
                         key=padded_k.transpose(2, 1),
                         value=padded_v.transpose(2, 1),
@@ -381,7 +402,7 @@ class ActionModule(nn.Module):
 
                 if is_causal:
                     if kv_cache_keyboard is None:
-                        assert q.shape[0] == k.shape[0] and q.shape[0] % 880 == 0 
+                        assert q.shape[0] == k.shape[0] and q.shape[0] % 880 == 0
 
                         padded_length = math.ceil(q.shape[1] / 32) * 32 - q.shape[1]
                         padded_q = torch.cat(
@@ -400,7 +421,8 @@ class ActionModule(nn.Module):
                                             device=v.device, dtype=v.dtype)],
                             dim=1
                         )
-                        attn = flex_attention(
+                        attn = _log_first_flex(
+                            "keyboard attention (rope)", _kbd_attn_rope_first_call,
                             query=padded_q.transpose(2, 1), # after: B, HW, F, C
                             key=padded_k.transpose(2, 1),
                             value=padded_v.transpose(2, 1),
@@ -461,7 +483,7 @@ class ActionModule(nn.Module):
             else:
                 if is_causal:
                     if kv_cache_keyboard is None:
-                        
+
                         padded_length = math.ceil(q.shape[1] / 32) * 32 - q.shape[1]
                         padded_q = torch.cat(
                             [q,
@@ -479,7 +501,8 @@ class ActionModule(nn.Module):
                                             device=v.device, dtype=v.dtype)],
                             dim=1
                         )
-                        attn = flex_attention(
+                        attn = _log_first_flex(
+                            "keyboard attention (no-rope)", _kbd_attn_norope_first_call,
                             query=padded_q.transpose(2, 1), # after: B, HW, F, C
                             key=padded_k.transpose(2, 1),
                             value=padded_v.transpose(2, 1),
