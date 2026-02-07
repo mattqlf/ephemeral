@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
     <title>Ephemeral Remote</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -12,9 +15,19 @@
             --text: #e0e0e0;
             --text-dim: #4a4a4a;
             --text-muted: #333;
-            --accent: #00d4aa;
-            --border: #1a1a1a;
-            --border-light: #2a2a2a;
+            --accent: #7eb8a8;
+            --accent-glow: rgba(126, 184, 168, 0.15);
+            --accent-bright: #a3d4c5;
+            --border: rgba(255, 255, 255, 0.06);
+            --border-light: rgba(255, 255, 255, 0.10);
+            --radius-sm: 6px;
+            --radius-md: 10px;
+            --radius-lg: 14px;
+            --font-body: 'Inter', -apple-system, sans-serif;
+            --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+            --transition-fast: 0.15s ease;
+            --transition-normal: 0.3s ease;
+            --transition-slow: 0.5s ease;
         }
 
         html, body {
@@ -24,7 +37,7 @@
         }
 
         body {
-            font-family: 'Courier New', monospace;
+            font-family: var(--font-body);
             background: var(--bg);
             color: var(--text);
             display: flex;
@@ -43,8 +56,9 @@
         }
 
         .logo {
-            font-size: 11px;
-            letter-spacing: 0.1em;
+            font-size: 12px;
+            font-weight: 500;
+            letter-spacing: 0.08em;
             text-transform: uppercase;
             color: var(--text);
         }
@@ -60,6 +74,7 @@
         .status-dot {
             width: 6px;
             height: 6px;
+            border-radius: 50%;
             background: var(--text-dim);
         }
 
@@ -70,11 +85,16 @@
 
         .status-dot.waiting {
             background: var(--accent);
-            animation: blink 1s step-end infinite;
+            animation: pulse-dot 1.5s ease-in-out infinite;
         }
 
         .status-dot.error {
             background: #ff4444;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
         }
 
         @keyframes blink {
@@ -111,19 +131,21 @@
         }
 
         .key {
-            width: 64px;
-            height: 64px;
-            background: #151515;
-            border: 1px solid #333;
+            width: 68px;
+            height: 68px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: var(--radius-sm);
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
+            font-family: var(--font-mono);
             font-size: 16px;
             font-weight: 500;
             color: #999;
             cursor: pointer;
-            transition: all 0.1s;
+            transition: all var(--transition-fast);
             gap: 3px;
             -webkit-tap-highlight-color: transparent;
         }
@@ -132,6 +154,7 @@
             background: var(--accent);
             border-color: var(--accent);
             color: var(--bg);
+            transform: scale(0.95);
         }
 
         .key:active:not(.empty) .key-hint {
@@ -141,6 +164,7 @@
         .key.empty { visibility: hidden; }
 
         .key-hint {
+            font-family: var(--font-mono);
             font-size: 8px;
             color: #666;
             text-transform: uppercase;
@@ -158,33 +182,40 @@
             flex-direction: column;
             gap: 16px;
             z-index: 100;
+            opacity: 1;
+            transition: opacity var(--transition-slow);
         }
 
         .name-overlay.hidden {
-            display: none;
+            opacity: 0;
+            pointer-events: none;
         }
 
         .name-title {
-            font-size: 11px;
+            font-size: 12px;
             color: var(--text-dim);
             text-transform: uppercase;
             letter-spacing: 0.1em;
+            font-weight: 400;
         }
 
         .name-input {
-            width: 200px;
-            padding: 10px 14px;
+            width: 220px;
+            padding: 12px 16px;
             background: var(--bg);
             border: 1px solid var(--border-light);
+            border-radius: var(--radius-sm);
             color: var(--text);
-            font-family: 'Courier New', monospace;
-            font-size: 14px;
+            font-family: var(--font-body);
+            font-size: 15px;
             text-align: center;
             outline: none;
+            transition: border-color var(--transition-fast);
         }
 
         .name-input:focus {
             border-color: var(--accent);
+            box-shadow: 0 0 12px var(--accent-glow);
         }
 
         .name-input::placeholder {
@@ -192,15 +223,22 @@
         }
 
         .name-go-btn {
-            padding: 10px 24px;
-            font-family: 'Courier New', monospace;
-            font-size: 10px;
+            padding: 12px 28px;
+            font-family: var(--font-body);
+            font-size: 11px;
+            font-weight: 500;
             text-transform: uppercase;
             letter-spacing: 0.1em;
             border: 1px solid var(--accent);
+            border-radius: var(--radius-sm);
             background: var(--accent);
             color: var(--bg);
             cursor: pointer;
+            transition: all var(--transition-fast);
+        }
+
+        .name-go-btn:active {
+            transform: scale(0.97);
         }
 
         .closed-overlay {
@@ -273,14 +311,15 @@
 
         .caption-text {
             display: inline-block;
-            font-family: 'Courier New', monospace;
+            font-family: var(--font-body);
             font-size: 14px;
+            font-weight: 400;
             color: #e0e0e0;
-            text-shadow: 0 0 8px rgba(0, 212, 170, 0.4), 0 1px 3px rgba(0,0,0,0.9);
-            letter-spacing: 0.04em;
+            text-shadow: 0 0 12px rgba(126, 184, 168, 0.3), 0 1px 4px rgba(0,0,0,0.9);
+            letter-spacing: 0.02em;
             line-height: 1.5;
             opacity: 0;
-            transition: opacity 0.3s ease;
+            transition: opacity var(--transition-normal);
         }
 
         .caption-text.visible { opacity: 1; }
@@ -293,7 +332,12 @@
             background: var(--accent);
             margin-left: 2px;
             vertical-align: middle;
-            animation: blink 0.6s step-end infinite;
+            animation: cursor-breathe 1.2s ease-in-out infinite;
+        }
+
+        @keyframes cursor-breathe {
+            0%, 100% { opacity: 0.2; }
+            50% { opacity: 1; }
         }
 
         .modal-controls {
@@ -305,13 +349,18 @@
         }
 
         .modal-controls .key {
-            width: 52px;
-            height: 52px;
+            width: 54px;
+            height: 54px;
             font-size: 14px;
         }
 
         .modal-controls .key-hint {
             font-size: 7px;
+        }
+
+        /* Action sent pulse on video area */
+        .video-area.action-pulse {
+            box-shadow: inset 0 0 30px var(--accent-glow);
         }
 
         /* Queue overlay */
@@ -349,7 +398,7 @@
             color: var(--text-muted);
         }
 
-        /* Loading overlay */
+        /* Loading overlay with mosaic */
         .loading-overlay {
             display: none;
             position: fixed;
@@ -358,7 +407,7 @@
             align-items: center;
             justify-content: center;
             flex-direction: column;
-            gap: 16px;
+            gap: 20px;
             z-index: 90;
         }
 
@@ -366,17 +415,24 @@
             display: flex;
         }
 
-        .loading-spinner {
-            width: 32px;
-            height: 32px;
-            border: 2px solid var(--border-light);
-            border-top: 2px solid var(--accent);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
+        .loading-mosaic {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            grid-template-rows: repeat(4, 1fr);
+            gap: 3px;
+            width: min(280px, 70vw);
+            aspect-ratio: 640 / 352;
         }
 
-        @keyframes spin {
-            to { transform: rotate(360deg); }
+        .mosaic-tile {
+            background: rgba(126, 184, 168, 0.06);
+            border-radius: 2px;
+            animation: mosaic-pulse 2.5s ease-in-out infinite;
+        }
+
+        @keyframes mosaic-pulse {
+            0%, 100% { background: rgba(126, 184, 168, 0.04); }
+            50% { background: rgba(126, 184, 168, 0.12); }
         }
 
         .loading-text {
@@ -386,13 +442,23 @@
             letter-spacing: 0.1em;
         }
 
+        /* Modal layout fade-in */
+        .modal-layout.active {
+            animation: fade-in var(--transition-slow) ease;
+        }
+
+        @keyframes fade-in {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
     </style>
 </head>
 <body>
     <div class="name-overlay" id="nameOverlay">
         <div class="name-title">Enter your name</div>
         <input type="text" class="name-input" id="nameInput" placeholder="Player" maxlength="16" autocomplete="off" />
-        <button class="name-go-btn" id="nameGoBtn">> Join</button>
+        <button class="name-go-btn" id="nameGoBtn">Join</button>
     </div>
 
     <header>
@@ -451,7 +517,7 @@
 
     <!-- Loading overlay -->
     <div class="loading-overlay" id="loadingOverlay">
-        <div class="loading-spinner"></div>
+        <div class="loading-mosaic" id="loadingMosaic"></div>
         <div class="loading-text" id="loadingText">Loading your world...</div>
     </div>
 
@@ -480,6 +546,15 @@
         const loadingOverlay = document.getElementById('loadingOverlay');
         const loadingText = document.getElementById('loadingText');
         const bgMusic = document.getElementById('bgMusic');
+
+        // Build mosaic tiles
+        const mosaicEl = document.getElementById('loadingMosaic');
+        for (let i = 0; i < 24; i++) {
+            const tile = document.createElement('div');
+            tile.className = 'mosaic-tile';
+            tile.style.animationDelay = (Math.random() * 2.5).toFixed(2) + 's';
+            mosaicEl.appendChild(tile);
+        }
 
         // Extract room_id from URL path: /room/{room_id} or /modal-room/{room_id}
         const pathParts = location.pathname.split('/');
@@ -671,6 +746,16 @@
                 lastMouse = 'u';
             }
             sendAction(lastKeyboard, lastMouse);
+            // Action pulse on video area
+            const videoArea = document.querySelector('.video-area');
+            if (videoArea) {
+                videoArea.classList.add('action-pulse');
+                requestAnimationFrame(() => requestAnimationFrame(() => {
+                    videoArea.style.transition = 'box-shadow 0.4s ease-out';
+                    videoArea.classList.remove('action-pulse');
+                    setTimeout(() => { videoArea.style.transition = ''; }, 400);
+                }));
+            }
         }
 
         function resizeVideoCanvas() {

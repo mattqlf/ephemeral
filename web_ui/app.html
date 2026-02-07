@@ -4,14 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ephemeral</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script src="https://js.hcaptcha.com/1/api.js?render=explicit&host=suno.com" async defer></script>
     <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
     <style>
-        @font-face {
-            font-family: 'Pixel';
-            src: url('https://fonts.cdnfonts.com/s/75325/PressStart2P-Regular.woff') format('woff');
-        }
-
         * {
             margin: 0;
             padding: 0;
@@ -24,9 +22,19 @@
             --text: #e0e0e0;
             --text-dim: #4a4a4a;
             --text-muted: #333;
-            --accent: #00d4aa;
-            --border: #1a1a1a;
-            --border-light: #2a2a2a;
+            --accent: #7eb8a8;
+            --accent-glow: rgba(126, 184, 168, 0.15);
+            --accent-bright: #a3d4c5;
+            --border: rgba(255, 255, 255, 0.06);
+            --border-light: rgba(255, 255, 255, 0.10);
+            --radius-sm: 6px;
+            --radius-md: 10px;
+            --radius-lg: 14px;
+            --font-body: 'Inter', -apple-system, sans-serif;
+            --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+            --transition-fast: 0.15s ease;
+            --transition-normal: 0.3s ease;
+            --transition-slow: 0.5s ease;
         }
 
         html, body {
@@ -35,15 +43,9 @@
         }
 
         body {
-            font-family: 'Courier New', monospace;
+            font-family: var(--font-body);
             background: var(--bg);
             color: var(--text);
-            image-rendering: pixelated;
-        }
-
-        /* Scanline effect - disabled */
-        .bg-scanlines {
-            display: none;
         }
 
         .app {
@@ -65,16 +67,17 @@
         }
 
         .logo {
-            font-family: 'Pixel', 'Courier New', monospace;
-            font-size: 12px;
-            letter-spacing: 0.1em;
+            font-family: var(--font-body);
+            font-size: 13px;
+            font-weight: 500;
+            letter-spacing: 0.08em;
             text-decoration: none;
             color: var(--text);
             text-transform: uppercase;
         }
 
         .logo:hover {
-            color: var(--accent);
+            color: var(--accent-bright);
         }
 
         .header-meta {
@@ -86,6 +89,14 @@
             letter-spacing: 0.05em;
         }
 
+        .header-meta strong {
+            font-family: var(--font-mono);
+        }
+
+        #resDisplay {
+            font-family: var(--font-mono);
+        }
+
         .status-badge {
             display: flex;
             align-items: center;
@@ -94,11 +105,13 @@
             font-size: 10px;
             color: var(--text-dim);
             border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
         }
 
         .status-dot {
             width: 6px;
             height: 6px;
+            border-radius: 50%;
             background: var(--text-dim);
         }
 
@@ -109,11 +122,16 @@
 
         .status-dot.waiting {
             background: var(--accent);
-            animation: blink 1s step-end infinite;
+            animation: pulse-dot 1.5s ease-in-out infinite;
         }
 
         .status-dot.error {
             background: #ff4444;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
         }
 
         @keyframes blink {
@@ -126,16 +144,18 @@
             background: var(--bg);
             display: flex;
             flex-direction: column;
-            padding: 16px;
+            padding: 0 16px 16px 16px;
             gap: 12px;
         }
 
         .video-container {
             flex: 1;
             background: #000;
-            border: 1px solid var(--border);
+            border: none;
+            border-radius: 0;
             position: relative;
-            min-height: 0; /* Allow flex shrinking */
+            min-height: 0;
+            overflow: hidden;
         }
 
         /* Multi-world grid */
@@ -143,10 +163,11 @@
             display: grid;
             width: 100%;
             height: 100%;
-            gap: 2px;
+            gap: 4px;
+            padding: 4px;
         }
 
-        .worlds-grid.worlds-1 { grid-template-columns: 1fr; }
+        .worlds-grid.worlds-1 { grid-template-columns: 1fr; padding: 0; gap: 0; }
         .worlds-grid.worlds-2 { grid-template-columns: 1fr 1fr; }
         .worlds-grid.worlds-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
 
@@ -154,6 +175,7 @@
             position: relative;
             background: #000;
             overflow: hidden;
+            border-radius: var(--radius-sm);
         }
 
         .world-cell.active {
@@ -177,12 +199,9 @@
         }
 
         .world-cell canvas {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            max-width: 100%;
-            max-height: 100%;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
             image-rendering: pixelated;
         }
 
@@ -204,6 +223,7 @@
             right: 0;
             padding: 10px 14px;
             background: linear-gradient(transparent, rgba(0,0,0,0.9));
+            font-family: var(--font-mono);
             font-size: 10px;
             color: var(--text-dim);
             letter-spacing: 0.05em;
@@ -221,14 +241,15 @@
 
         .caption-text {
             display: inline-block;
-            font-family: 'Courier New', monospace;
+            font-family: var(--font-body);
             font-size: 16px;
+            font-weight: 400;
             color: #e0e0e0;
-            text-shadow: 0 0 8px rgba(0, 212, 170, 0.4), 0 1px 3px rgba(0,0,0,0.9);
-            letter-spacing: 0.04em;
+            text-shadow: 0 0 12px rgba(126, 184, 168, 0.3), 0 1px 4px rgba(0,0,0,0.9);
+            letter-spacing: 0.02em;
             line-height: 1.5;
             opacity: 0;
-            transition: opacity 0.3s ease;
+            transition: opacity var(--transition-normal);
         }
 
         .caption-text.visible {
@@ -247,12 +268,12 @@
             background: var(--accent);
             margin-left: 2px;
             vertical-align: middle;
-            animation: cursor-blink 0.6s step-end infinite;
+            animation: cursor-breathe 1.2s ease-in-out infinite;
         }
 
-        @keyframes cursor-blink {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0; }
+        @keyframes cursor-breathe {
+            0%, 100% { opacity: 0.2; }
+            50% { opacity: 1; }
         }
 
         /* Image bar */
@@ -263,10 +284,12 @@
             padding: 10px 14px;
             background: var(--bg-panel);
             border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
         }
 
         .image-bar-label {
             font-size: 9px;
+            font-weight: 500;
             color: var(--text-dim);
             text-transform: uppercase;
             letter-spacing: 0.1em;
@@ -278,20 +301,22 @@
 
         .tab-btn {
             padding: 5px 10px;
-            font-family: 'Courier New', monospace;
+            font-family: var(--font-body);
             font-size: 9px;
+            font-weight: 500;
             background: transparent;
             border: 1px solid var(--border);
             color: var(--text-dim);
             cursor: pointer;
             text-transform: uppercase;
             letter-spacing: 0.05em;
-            transition: all 0.15s;
+            transition: all var(--transition-fast);
         }
 
-        .tab-btn:first-child { border-right: none; }
+        .tab-btn:first-child { border-right: none; border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+        .tab-btn:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
         .tab-btn:hover { border-color: var(--border-light); color: var(--text); }
-        .tab-btn.active { background: var(--border); color: var(--text); }
+        .tab-btn.active { background: rgba(255, 255, 255, 0.06); color: var(--text); }
 
         .image-select-wrapper {
             flex: 1;
@@ -302,8 +327,9 @@
             padding: 6px 10px;
             background: var(--bg);
             border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
             color: var(--text);
-            font-family: 'Courier New', monospace;
+            font-family: var(--font-body);
             font-size: 10px;
             cursor: pointer;
             outline: none;
@@ -334,11 +360,12 @@
             padding: 6px 12px;
             background: transparent;
             border: 1px dashed var(--border-light);
+            border-radius: var(--radius-sm);
             color: var(--text-dim);
-            font-family: 'Courier New', monospace;
+            font-family: var(--font-body);
             font-size: 10px;
             cursor: pointer;
-            transition: all 0.15s;
+            transition: all var(--transition-fast);
         }
 
         .upload-btn:hover {
@@ -391,6 +418,7 @@
             padding: 10px 14px;
             background: var(--bg-panel);
             border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
         }
 
         .prompt-bar-label {
@@ -399,6 +427,7 @@
             text-transform: uppercase;
             letter-spacing: 0.1em;
             white-space: nowrap;
+            font-weight: 500;
         }
 
         .prompt-input {
@@ -406,10 +435,12 @@
             padding: 6px 10px;
             background: var(--bg);
             border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
             color: var(--text);
-            font-family: 'Courier New', monospace;
+            font-family: var(--font-body);
             font-size: 10px;
             outline: none;
+            transition: border-color var(--transition-fast);
         }
 
         .prompt-input::placeholder {
@@ -418,13 +449,16 @@
 
         .prompt-input:focus {
             border-color: var(--accent);
+            box-shadow: 0 0 8px var(--accent-glow);
         }
 
         .prompt-badge {
             font-size: 8px;
+            font-weight: 600;
             color: var(--bg);
             background: var(--accent);
-            padding: 2px 6px;
+            padding: 2px 8px;
+            border-radius: 3px;
             letter-spacing: 0.05em;
             white-space: nowrap;
         }
@@ -435,20 +469,17 @@
             border-left: 1px solid var(--border);
             display: flex;
             flex-direction: column;
-            padding: 16px;
-            gap: 16px;
+            padding: 20px;
+            gap: 20px;
         }
 
         .section-title {
             font-size: 9px;
+            font-weight: 500;
             color: #777;
             text-transform: uppercase;
             letter-spacing: 0.1em;
             margin-bottom: 8px;
-        }
-
-        .section-title span {
-            color: var(--accent);
         }
 
         .section-title.sub {
@@ -472,24 +503,26 @@
 
         .key {
             aspect-ratio: 1;
-            background: #151515;
-            border: 1px solid #333;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: var(--radius-sm);
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
+            font-family: var(--font-mono);
             font-size: 12px;
             font-weight: 500;
             color: #999;
             cursor: pointer;
-            transition: all 0.1s;
+            transition: all var(--transition-fast);
             gap: 2px;
         }
 
         .key:hover:not(.disabled):not(.empty) {
-            border-color: #555;
+            border-color: rgba(255, 255, 255, 0.15);
             color: var(--text);
-            background: #1a1a1a;
+            background: rgba(255, 255, 255, 0.05);
         }
 
         .key.active {
@@ -502,6 +535,7 @@
         .key.disabled { opacity: 0.35; pointer-events: none; }
 
         .key-hint {
+            font-family: var(--font-mono);
             font-size: 7px;
             color: #666;
             text-transform: uppercase;
@@ -519,6 +553,8 @@
             padding: 10px 12px;
             background: var(--bg);
             border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            font-family: var(--font-mono);
             font-size: 10px;
             color: var(--text-dim);
         }
@@ -530,15 +566,17 @@
 
         /* Hint */
         .hint-text {
-            font-size: 9px;
+            font-size: 10px;
             color: var(--text-muted);
             line-height: 1.6;
-            padding: 10px;
+            padding: 10px 12px;
             background: var(--bg);
             border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
         }
 
         .hint-text code {
+            font-family: var(--font-mono);
             color: var(--text-dim);
         }
 
@@ -547,15 +585,15 @@
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 6px 10px;
-            background: rgba(0, 212, 170, 0.05);
+            padding: 8px 12px;
+            background: var(--accent-glow);
             border: 1px solid var(--border);
-            border-radius: 4px;
+            border-radius: var(--radius-sm);
             margin-top: 6px;
         }
 
         .music-bar.generating {
-            border-color: rgba(0, 212, 170, 0.2);
+            border-color: rgba(126, 184, 168, 0.2);
         }
 
         .music-bar.error {
@@ -564,8 +602,8 @@
         }
 
         .music-bar.playing {
-            border-color: rgba(0, 212, 170, 0.3);
-            background: rgba(0, 212, 170, 0.08);
+            border-color: rgba(126, 184, 168, 0.3);
+            background: rgba(126, 184, 168, 0.08);
         }
 
         .music-dot {
@@ -595,7 +633,7 @@
         }
 
         .music-label {
-            font-family: 'Courier New', monospace;
+            font-family: var(--font-body);
             font-size: 9px;
             color: var(--accent);
             opacity: 0.8;
@@ -607,16 +645,18 @@
         }
 
         .music-play-btn {
-            padding: 2px 8px;
-            font-family: 'Courier New', monospace;
+            padding: 3px 10px;
+            font-family: var(--font-body);
             font-size: 8px;
+            font-weight: 500;
             background: transparent;
-            border: 1px solid rgba(0, 212, 170, 0.3);
+            border: 1px solid rgba(126, 184, 168, 0.3);
+            border-radius: 3px;
             color: var(--accent);
             cursor: pointer;
             text-transform: uppercase;
             letter-spacing: 0.05em;
-            transition: all 0.15s;
+            transition: all var(--transition-fast);
             display: none;
         }
 
@@ -646,14 +686,15 @@
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 6px 10px;
-            background: rgba(0, 212, 170, 0.05);
+            padding: 8px 12px;
+            background: var(--accent-glow);
             border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
             margin-top: 6px;
         }
 
         .export-label {
-            font-family: 'Courier New', monospace;
+            font-family: var(--font-body);
             font-size: 9px;
             color: var(--accent);
             opacity: 0.8;
@@ -677,15 +718,17 @@
         .btn {
             flex: 1;
             padding: 10px 14px;
-            font-family: 'Courier New', monospace;
+            font-family: var(--font-body);
             font-size: 10px;
+            font-weight: 500;
             text-transform: uppercase;
             letter-spacing: 0.1em;
             border: 1px solid var(--border-light);
+            border-radius: var(--radius-sm);
             background: transparent;
             color: var(--text);
             cursor: pointer;
-            transition: all 0.15s;
+            transition: all var(--transition-fast);
         }
 
         .btn:hover:not(:disabled) {
@@ -702,8 +745,8 @@
         }
 
         .btn-primary:hover:not(:disabled) {
-            background: #00e8bb;
-            border-color: #00e8bb;
+            background: var(--accent-bright);
+            border-color: var(--accent-bright);
         }
 
         #fileInput { display: none; }
@@ -714,20 +757,21 @@
             top: 10px;
             right: 10px;
             background: rgba(0, 0, 0, 0.4);
-            border: 1px solid rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            border-radius: var(--radius-sm);
             color: var(--text-dim);
-            padding: 5px 8px;
+            padding: 6px 9px;
             cursor: pointer;
-            font-family: 'Courier New', monospace;
             font-size: 14px;
             z-index: 5;
-            transition: all 0.2s;
+            transition: all var(--transition-fast);
             line-height: 1;
         }
 
         .fullscreen-btn:hover {
             border-color: var(--accent);
-            color: var(--accent);
+            color: var(--accent-bright);
             background: rgba(0, 0, 0, 0.6);
         }
 
@@ -747,14 +791,15 @@
             transform: translateX(-50%);
             align-items: center;
             gap: 16px;
-            padding: 10px 16px;
-            background: rgba(0, 0, 0, 0.25);
-            backdrop-filter: blur(8px);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 8px;
+            padding: 12px 20px;
+            background: rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: var(--radius-lg);
             z-index: 10;
             opacity: 0.5;
-            transition: opacity 0.3s;
+            transition: opacity var(--transition-normal);
         }
 
         .video-container:fullscreen .fullscreen-controls:hover {
@@ -867,23 +912,25 @@
 
         .fullscreen-controls .fs-btn,
         .fs-actions-float .fs-btn {
-            padding: 5px 10px;
-            font-family: 'Courier New', monospace;
-            font-size: 8px;
+            padding: 5px 12px;
+            font-family: var(--font-body);
+            font-size: 9px;
+            font-weight: 500;
             text-transform: uppercase;
             letter-spacing: 0.05em;
-            border: 1px solid rgba(42, 42, 42, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: var(--radius-sm);
             background: rgba(0, 0, 0, 0.3);
             color: rgba(224, 224, 224, 0.7);
             cursor: pointer;
-            transition: all 0.15s;
+            transition: all var(--transition-fast);
             white-space: nowrap;
         }
 
         .fullscreen-controls .fs-btn:hover,
         .fs-actions-float .fs-btn:hover {
             border-color: var(--accent);
-            color: var(--accent);
+            color: var(--accent-bright);
         }
 
         .video-container:fullscreen .caption-overlay {
@@ -911,15 +958,17 @@
         .room-btn {
             width: 100%;
             padding: 8px 12px;
-            font-family: 'Courier New', monospace;
+            font-family: var(--font-body);
             font-size: 9px;
+            font-weight: 500;
             text-transform: uppercase;
             letter-spacing: 0.1em;
             border: 1px solid var(--border-light);
+            border-radius: var(--radius-sm);
             background: transparent;
             color: var(--text-dim);
             cursor: pointer;
-            transition: all 0.15s;
+            transition: all var(--transition-fast);
         }
 
         .room-btn:hover {
@@ -937,9 +986,10 @@
             flex-direction: column;
             align-items: center;
             gap: 8px;
-            padding: 10px;
+            padding: 12px;
             background: var(--bg);
             border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
         }
 
         .room-panel.visible {
@@ -948,7 +998,8 @@
 
         .room-qr {
             background: #fff;
-            padding: 6px;
+            padding: 8px;
+            border-radius: var(--radius-sm);
         }
 
         .room-qr img {
@@ -978,7 +1029,8 @@
             display: grid;
             width: 100%;
             height: 100%;
-            gap: 2px;
+            gap: 4px;
+            padding: 4px;
             background: #000;
         }
 
@@ -998,6 +1050,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
+            border-radius: var(--radius-sm);
         }
 
         .modal-player-cell canvas {
@@ -1014,11 +1067,16 @@
             position: absolute;
             top: 6px;
             left: 8px;
+            font-family: var(--font-body);
             font-size: 9px;
+            font-weight: 500;
             color: var(--accent);
             z-index: 2;
             pointer-events: none;
             text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+            background: rgba(0, 0, 0, 0.4);
+            padding: 2px 6px;
+            border-radius: 3px;
         }
 
         .modal-player-cell .caption-overlay {
@@ -1042,12 +1100,116 @@
             letter-spacing: 0.05em;
         }
 
+        /* ── Phase 5 Animations ── */
+
+        /* 5A: Mosaic world loading */
+        .mosaic-loading {
+            position: absolute;
+            inset: 0;
+            background: #000;
+            z-index: 3;
+        }
+
+        .mosaic-loading canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            image-rendering: pixelated;
+        }
+
+        .mosaic-loading .mosaic-status {
+            position: absolute;
+            bottom: 24px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-family: var(--font-body);
+            font-size: 10px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            z-index: 1;
+        }
+
+        /* 5B: Player join animation */
+        @keyframes cell-appear {
+            from { transform: scale(0.85); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+
+        .modal-player-cell {
+            animation: cell-appear 0.5s ease both;
+        }
+
+        /* 5C: Player disconnect fade */
+        .modal-player-cell.disconnecting {
+            opacity: 0;
+            transform: scale(0.9);
+            transition: opacity 0.4s ease, transform 0.4s ease;
+        }
+
+        /* 5E: Music arrival shimmer */
+        .video-container.music-shimmer::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: var(--radius-md);
+            background: linear-gradient(90deg, transparent 20%, rgba(126, 184, 168, 0.35) 50%, transparent 80%);
+            animation: shimmer-sweep 1.8s ease forwards;
+            pointer-events: none;
+            z-index: 4;
+        }
+
+        @keyframes shimmer-sweep {
+            0% { transform: translateX(-100%); opacity: 1; }
+            70% { opacity: 1; }
+            100% { transform: translateX(100%); opacity: 0; }
+        }
+
+        /* 5F: Room panel slide-up / QR scale-in */
+        .room-panel.visible {
+            animation: slide-up-fade 0.4s ease both;
+        }
+
+        @keyframes slide-up-fade {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .room-panel.visible .room-qr {
+            animation: scale-in 0.6s ease both;
+            animation-delay: 0.15s;
+        }
+
+        @keyframes scale-in {
+            from { transform: scale(0.8); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+
+        /* 5G: Solo-to-multiplayer cross-fade */
+        .worlds-grid.fade-out {
+            opacity: 0;
+            transition: opacity 0.4s ease;
+        }
+
+        .modal-player-grid.fade-in {
+            animation: fade-in 0.4s ease both;
+        }
+
+        @keyframes fade-in {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        /* 5H: Action sent pulse */
+        .video-container.action-pulse {
+            box-shadow: inset 0 0 40px var(--accent-glow);
+        }
+
 
     </style>
 </head>
 <body>
-    <div class="bg-scanlines"></div>
-
     <div class="app">
         <header>
             <a href="#" class="logo">Ephemeral</a>
@@ -1072,7 +1234,7 @@
                 </div>
                 <!-- captions are created per-world-cell by setupWorlds() -->
                 <div class="video-overlay">
-                    <span id="inputDisplay">> waiting for input...</span>
+                    <span id="inputDisplay">waiting for input...</span>
                 </div>
                 <button class="fullscreen-btn" id="fullscreenBtn" title="Toggle fullscreen">&#x26F6;</button>
                 <div class="fullscreen-controls">
@@ -1125,7 +1287,7 @@
                     </select>
                 </div>
                 <div class="upload-inline active" id="uploadTab">
-                    <button class="upload-btn" id="uploadBtn">> drop or select image</button>
+                    <button class="upload-btn" id="uploadBtn">Drop or select image</button>
                     <div class="upload-preview" id="uploadPreview">
                         <img id="previewImg" src="" alt="">
                         <span class="upload-preview-name" id="previewName"></span>
@@ -1144,7 +1306,7 @@
 
         <div class="control-panel">
             <div>
-                <div class="section-title"><span>></span> Controls</div>
+                <div class="section-title">Controls</div>
                 <div class="controls-grid">
                     <div>
                         <div class="section-title sub">Camera</div>
@@ -1178,7 +1340,7 @@
             </div>
 
             <div>
-                <div class="section-title"><span>></span> Sequence</div>
+                <div class="section-title">Sequence</div>
                 <div class="sequence-display">
                     <div class="sequence-step" id="step1">
                         cam: <span class="sequence-value" id="cameraValue">-</span>
@@ -1195,8 +1357,8 @@
             </div>
 
             <div class="room-section">
-                <div class="section-title"><span>></span> Multiplayer</div>
-                <button class="room-btn" id="modalRoomBtn">> Open Room</button>
+                <div class="section-title">Multiplayer</div>
+                <button class="room-btn" id="modalRoomBtn">Open Room</button>
                 <div class="room-panel" id="modalRoomPanel">
                     <div class="room-qr" id="modalRoomQr"></div>
                     <div class="room-url" id="modalRoomUrl"></div>
@@ -1205,9 +1367,9 @@
             </div>
 
             <div class="action-buttons">
-                <button class="btn btn-primary" id="startBtn">> Start</button>
+                <button class="btn btn-primary" id="startBtn">Start</button>
                 <button class="btn" id="stopBtn" disabled>Stop</button>
-                <button class="btn btn-export" id="exportBtn" disabled style="display:none;">> Export</button>
+                <button class="btn btn-export" id="exportBtn" disabled style="display:none;">Export</button>
             </div>
 
             <div class="export-bar" id="exportBar" style="display:none;">
@@ -1356,7 +1518,9 @@
             // Update primary canvas/ctx references to world 0
             canvas = worldCanvases[0].canvas;
             ctx = worldCanvases[0].ctx;
+            // Defer resize to next frame so layout has computed cell dimensions
             resizeCanvases();
+            requestAnimationFrame(() => resizeCanvases());
         }
 
         let captionFadeTimers = {};   // world_id -> timeout id
@@ -1580,7 +1744,7 @@
             cameraValue.textContent = moveValue.textContent = '-';
             step1.classList.remove('complete');
             step2.classList.remove('active', 'complete');
-            inputDisplay.textContent = '> press any key...';
+            inputDisplay.textContent = 'press any key...';
             updateKeyStates();
         }
 
@@ -1611,7 +1775,7 @@
             updateKeyStates();
             highlightKey(key, 'camera');
             highlightKey('q', 'movement');
-            inputDisplay.textContent = `> sent: ${key.toUpperCase()} + Q`;
+            inputDisplay.textContent = `sent: ${key.toUpperCase()} + Q`;
             sendAction();
         }
 
@@ -1629,7 +1793,7 @@
             updateKeyStates();
             highlightKey('u', 'camera');
             highlightKey(key, 'movement');
-            inputDisplay.textContent = `> sent: U + ${key.toUpperCase()}`;
+            inputDisplay.textContent = `sent: U + ${key.toUpperCase()}`;
             sendAction();
         }
 
@@ -1646,6 +1810,7 @@
                 lastSentKeyboard = currentMovement;
                 lastSentMouse = currentCamera;
                 setStatus('Processing...', 'waiting');
+                triggerActionPulse();
                 // User gesture — try starting music if autoplay was blocked
                 if (musicPendingPlay && bgMusic.src) {
                     bgMusic.play().then(() => {
@@ -1670,6 +1835,7 @@
                 case 'frame': displayFrame(msg.data, msg.block, msg.world_id || 0); blockNum.textContent = msg.block; break;
                 case 'ready': {
                     setStatus('Ready', 'waiting');
+                    stopMosaicLoading();
                     const numW = msg.num_worlds || 1;
                     let resW, resH;
                     if (msg.resolution) {
@@ -1695,7 +1861,8 @@
                     break;
                 case 'generating_image':
                     setStatus('Gemini generating...', 'waiting');
-                    inputDisplay.textContent = `> ${msg.message || 'generating world with Gemini...'}`;
+                    inputDisplay.textContent = msg.message || 'generating world with Gemini...';
+                    startMosaicLoading(null);
                     break;
                 case 'image_preview': {
                     generatedImageB64 = msg.data;
@@ -1704,14 +1871,16 @@
                         worldCanvases.forEach(wc => wc.ctx.drawImage(previewImage, 0, 0, wc.canvas.width, wc.canvas.height));
                     };
                     previewImage.src = 'data:image/jpeg;base64,' + msg.data;
-                    inputDisplay.textContent = '> image generated, starting inference...';
+                    inputDisplay.textContent = 'image generated, starting inference...';
                     setStatus('Encoding...', 'waiting');
+                    startMosaicLoading(msg.data);
                     break;
                 }
                 case 'complete': case 'stopped':
                     setStatus(msg.type === 'complete' ? 'Complete' : 'Stopped', 'connected');
+                    stopMosaicLoading();
                     isRunning = false; startBtn.disabled = false; stopBtn.disabled = true;
-                    resetInputState(); inputDisplay.textContent = `> ${msg.type}`;
+                    resetInputState(); inputDisplay.textContent = msg.type;
                     if (recordedFrames.length > 1) {
                         exportBtn.style.display = '';
                         exportBtn.disabled = false;
@@ -1722,6 +1891,7 @@
                     break;
                 case 'error':
                     setStatus('Error', 'error'); isRunning = false;
+                    stopMosaicLoading();
                     startBtn.disabled = false; stopBtn.disabled = true; resetInputState(); break;
                 case 'caption': {
                     // Typewriter effect driven locally — per-world captions
@@ -1778,6 +1948,12 @@
                         bgMusic.src = msg.audio_urls[0];
                         bgMusic.volume = 0.4;
                         bgMusic.load();
+                        // Trigger music shimmer
+                        const vc = document.querySelector('.video-container');
+                        vc.classList.remove('music-shimmer');
+                        void vc.offsetWidth; // force reflow
+                        vc.classList.add('music-shimmer');
+                        setTimeout(() => vc.classList.remove('music-shimmer'), 1600);
                         bgMusic.play().then(() => {
                             musicPendingPlay = false;
                             setMusicState('playing', msg.title || 'playing');
@@ -1794,7 +1970,7 @@
                 // ── Modal Room messages ──
                 case 'modal_room_opened': {
                     modalRoomOpen = true;
-                    modalRoomBtn.textContent = '> Close Room';
+                    modalRoomBtn.textContent = 'Close Room';
                     modalRoomBtn.classList.add('active');
                     modalRoomPanel.classList.add('visible');
                     const roomPath = new URL(msg.url).pathname;
@@ -1805,8 +1981,9 @@
                     qr.addData(publicUrl);
                     qr.make();
                     modalRoomQr.innerHTML = qr.createImgTag(3, 0);
-                    // Hide solo worlds grid, prepare for player grid
-                    worldsGrid.style.display = 'none';
+                    // Cross-fade: solo worlds grid out
+                    worldsGrid.classList.add('fade-out');
+                    setTimeout(() => { worldsGrid.style.display = 'none'; worldsGrid.classList.remove('fade-out'); }, 400);
                     // Clear previous room recording
                     modalRecordedFrames = {};
                     modalPlayerNames = {};
@@ -1916,7 +2093,7 @@
             let grid = container.querySelector('.modal-player-grid');
             if (!grid) {
                 grid = document.createElement('div');
-                grid.className = 'modal-player-grid';
+                grid.className = 'modal-player-grid fade-in';
                 container.appendChild(grid);
             }
 
@@ -1927,11 +2104,16 @@
             const existingIds = new Set(Object.keys(modalPlayerCells));
             const newIds = new Set(activePlayers.map(p => p.player_id));
 
-            // Remove cells for players that left
+            // Remove cells for players that left (with fade-out animation)
             for (const pid of existingIds) {
                 if (!newIds.has(pid)) {
                     const cellInfo = modalPlayerCells[pid];
-                    if (cellInfo.cell.parentElement) cellInfo.cell.remove();
+                    if (cellInfo.cell.parentElement) {
+                        cellInfo.cell.classList.add('disconnecting');
+                        setTimeout(() => {
+                            if (cellInfo.cell.parentElement) cellInfo.cell.remove();
+                        }, 400);
+                    }
                     delete modalPlayerCells[pid];
                 }
             }
@@ -2072,7 +2254,7 @@
 
         function resetModalRoomUI() {
             modalRoomOpen = false;
-            modalRoomBtn.textContent = '> Open Room';
+            modalRoomBtn.textContent = 'Open Room';
             modalRoomBtn.classList.remove('active');
             modalRoomPanel.classList.remove('visible');
             modalRoomQr.innerHTML = '';
@@ -2110,21 +2292,21 @@
                 if (generatedImageB64) {
                     // Reuse the Gemini-generated image (from solo play or prior generation)
                     msg.seed_image_b64 = generatedImageB64;
-                    inputDisplay.textContent = '> opening room with generated image...';
+                    inputDisplay.textContent = 'opening room with generated image...';
                     setStatus('Opening room...', 'waiting');
                 } else if (prompt) {
                     // Generate new image with Gemini
                     if (image) msg.image = image;
                     msg.prompt = prompt;
-                    inputDisplay.textContent = '> generating world with Gemini...';
+                    inputDisplay.textContent = 'generating world with Gemini...';
                     setStatus('Generating image...', 'waiting');
                 } else if (image) {
                     // Use selected/uploaded image directly
                     msg.image = image;
-                    inputDisplay.textContent = '> opening room...';
+                    inputDisplay.textContent = 'opening room...';
                     setStatus('Opening room...', 'waiting');
                 } else {
-                    inputDisplay.textContent = '> provide an image or prompt first';
+                    inputDisplay.textContent = 'provide an image or prompt first';
                     return;
                 }
                 ws.send(JSON.stringify(msg));
@@ -2162,7 +2344,7 @@
 
                 // Case 4: no image and no text → block start
                 if (!image && !prompt) {
-                    inputDisplay.textContent = '> provide an image or prompt to start';
+                    inputDisplay.textContent = 'provide an image or prompt to start';
                     isRunning = false; startBtn.disabled = false; stopBtn.disabled = true;
                     return;
                 }
@@ -2172,10 +2354,10 @@
 
                 if (prompt) {
                     msg.prompt = prompt;
-                    inputDisplay.textContent = '> generating world with Gemini...';
+                    inputDisplay.textContent = 'generating world with Gemini...';
                     setStatus('Generating image...', 'waiting');
                 } else {
-                    inputDisplay.textContent = '> starting...';
+                    inputDisplay.textContent = 'starting...';
                     setStatus('Starting...', 'waiting');
                 }
 
@@ -2257,7 +2439,7 @@
             const exportW = cols * frameW + (cols - 1) * gap;
             const exportH = rows * frameH + (rows - 1) * gap;
 
-            const fps = 25;
+            const fps = 8;
             const exportCanvas = document.createElement('canvas');
             exportCanvas.width = exportW;
             exportCanvas.height = exportH;
@@ -2421,7 +2603,7 @@
             const exportW = cols * cellW + (cols - 1) * gap;
             const exportH = rows * (cellH + nameBarH) + (rows - 1) * gap;
 
-            const fps = 25;
+            const fps = 8;
             const exportCanvas = document.createElement('canvas');
             exportCanvas.width = exportW;
             exportCanvas.height = exportH;
@@ -2544,6 +2726,137 @@
 
         window.addEventListener('resize', () => { resizeCanvases(); resizeModalCanvases(); });
         resizeCanvases();
+
+        // ── 5A: Mosaic World Loading ──
+        let mosaicRafId = null;
+        let mosaicCanvas = null;
+        let mosaicCtx = null;
+        let mosaicStartTime = 0;
+        let mosaicSeedImage = null;
+        let mosaicTiles = [];  // {sx, sy, tx, ty, cx, cy, locked} for image mode
+
+        function startMosaicLoading(seedImageB64) {
+            stopMosaicLoading();
+            const container = document.querySelector('.video-container');
+            const el = document.createElement('div');
+            el.className = 'mosaic-loading';
+            el.id = 'mosaicLoading';
+
+            const c = document.createElement('canvas');
+            c.width = 640;
+            c.height = 352;
+            el.appendChild(c);
+
+            const status = document.createElement('div');
+            status.className = 'mosaic-status';
+            status.textContent = seedImageB64 ? 'Encoding world...' : 'Generating world...';
+            el.appendChild(status);
+
+            container.appendChild(el);
+            mosaicCanvas = c;
+            mosaicCtx = c.getContext('2d');
+            mosaicStartTime = performance.now();
+            mosaicSeedImage = null;
+            mosaicTiles = [];
+
+            if (seedImageB64) {
+                const img = new Image();
+                img.onload = () => {
+                    mosaicSeedImage = img;
+                    initImageTiles();
+                };
+                img.src = 'data:image/jpeg;base64,' + seedImageB64;
+            }
+
+            mosaicRafId = requestAnimationFrame(mosaicLoop);
+        }
+
+
+
+        function initImageTiles() {
+            const cols = 16, rows = 9;
+            const tw = mosaicCanvas.width / cols;
+            const th = mosaicCanvas.height / rows;
+            mosaicTiles = [];
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    mosaicTiles.push({
+                        sx: c * tw, sy: r * th,   // source position
+                        tx: c * tw, ty: r * th,   // target position
+                        cx: Math.random() * mosaicCanvas.width,  // current position (shuffled)
+                        cy: Math.random() * mosaicCanvas.height,
+                        locked: false,
+                    });
+                }
+            }
+        }
+
+        function mosaicLoop(now) {
+            if (!mosaicCtx) return;
+            const elapsed = (now - mosaicStartTime) / 1000;
+            const w = mosaicCanvas.width, h = mosaicCanvas.height;
+
+            if (mosaicSeedImage && mosaicTiles.length > 0) {
+                // Image mode: tiles lerp to correct positions
+                mosaicCtx.fillStyle = '#000';
+                mosaicCtx.fillRect(0, 0, w, h);
+                const cols = 16, rows = 9;
+                const tw = w / cols, th = h / rows;
+                const lockRate = 0.02;
+
+                for (const tile of mosaicTiles) {
+                    if (!tile.locked) {
+                        tile.cx += (tile.tx - tile.cx) * 0.04;
+                        tile.cy += (tile.ty - tile.cy) * 0.04;
+                        if (Math.abs(tile.cx - tile.tx) < 1 && Math.abs(tile.cy - tile.ty) < 1) {
+                            tile.cx = tile.tx;
+                            tile.cy = tile.ty;
+                            if (Math.random() < lockRate) tile.locked = true;
+                        }
+                    }
+                    mosaicCtx.drawImage(mosaicSeedImage, tile.sx, tile.sy, tw, th, tile.cx, tile.cy, tw, th);
+                }
+            } else {
+                // Abstract mode: wave-like color pulses
+                mosaicCtx.fillStyle = '#000';
+                mosaicCtx.fillRect(0, 0, w, h);
+                const cols = 16, rows = 9;
+                const tw = w / cols, th = h / rows;
+                for (let r = 0; r < rows; r++) {
+                    for (let c = 0; c < cols; c++) {
+                        const phase = (c + r * 0.7) * 0.4 + elapsed * 1.2;
+                        const brightness = 0.03 + 0.04 * Math.sin(phase);
+                        const accent = 0.02 + 0.02 * Math.sin(phase + 1);
+                        mosaicCtx.fillStyle = `rgba(${Math.round(126 * accent / 0.04)}, ${Math.round(184 * accent / 0.04)}, ${Math.round(168 * accent / 0.04)}, ${brightness})`;
+                        mosaicCtx.fillRect(c * tw + 1, r * th + 1, tw - 2, th - 2);
+                    }
+                }
+            }
+
+            mosaicRafId = requestAnimationFrame(mosaicLoop);
+        }
+
+        function stopMosaicLoading() {
+            if (mosaicRafId) cancelAnimationFrame(mosaicRafId);
+            mosaicRafId = null;
+            mosaicCanvas = null;
+            mosaicCtx = null;
+            mosaicSeedImage = null;
+            mosaicTiles = [];
+            const el = document.getElementById('mosaicLoading');
+            if (el) el.remove();
+        }
+
+        // ── 5H: Action Sent Pulse ──
+        function triggerActionPulse() {
+            const container = document.querySelector('.video-container');
+            container.classList.add('action-pulse');
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                container.style.transition = 'box-shadow 0.4s ease-out';
+                container.classList.remove('action-pulse');
+                setTimeout(() => { container.style.transition = ''; }, 400);
+            }));
+        }
 
         // ── Fullscreen ──
         function toggleFullscreen() {
