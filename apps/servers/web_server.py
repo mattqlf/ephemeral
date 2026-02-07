@@ -118,6 +118,36 @@ room_state: Optional[RoomState] = None
 server_port: int = 8080
 
 
+# ── Modal per-player multiplayer ──
+
+@dataclass
+class ModalPlayerState:
+    player_id: str
+    name: str
+    websocket: WebSocket
+    worker: object  # Modal class instance handle
+    status: str  # "queued" | "initializing" | "active" | "disconnected"
+    action_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
+    inference_task: Optional[asyncio.Task] = None
+
+
+@dataclass
+class ModalRoomState:
+    room_id: str
+    host_ws: WebSocket
+    seed_image_b64: str  # base64 of the seed image (no data: prefix)
+    mode: str
+    players: dict = field(default_factory=dict)  # player_id -> ModalPlayerState
+    queue: list = field(default_factory=list)  # ordered player_ids waiting
+    active_count: int = 0
+    max_active: int = 8
+    is_active: bool = True
+    music_urls: list = field(default_factory=list)
+
+
+modal_room_state: Optional[ModalRoomState] = None
+
+
 def _get_lan_ip() -> str:
     """Get the LAN IP address of this machine."""
     try:
@@ -1116,7 +1146,7 @@ class InferenceEngine:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 for i, result in enumerate(results):
                     if isinstance(result, Exception):
-                        logger.exception("[UI %s] World %d loop failed: %s", client_label, i, result)
+                        logger.error("[UI %s] World %d loop failed:", client_label, i, exc_info=result)
 
             # Send completion
             await self._send_ws(websocket, {"type": "complete"})
@@ -1387,6 +1417,440 @@ async def _close_room():
     room_state = None
 
 
+# ── Modal Room helpers ──
+
+def _get_modal_worker_class():
+    """Lazily import and return the Modal worker class."""
+    from modal_worker.worker import MatrixGameWorker
+    return MatrixGameWorker
+
+
+async def _modal_broadcast_player_list():
+    """Send updated player list to Modal room host."""
+    global modal_room_state
+    mrs = modal_room_state
+    if mrs is None:
+        return
+    players_info = []
+    for pid, ps in mrs.players.items():
+        players_info.append({
+            "player_id": pid,
+            "name": ps.name,
+            "status": ps.status,
+        })
+    queued_info = [{"player_id": pid, "name": mrs.players[pid].name}
+                   for pid in mrs.queue if pid in mrs.players]
+    msg = {
+        "type": "modal_room_update",
+        "active_count": mrs.active_count,
+        "max_active": mrs.max_active,
+        "players": players_info,
+        "queue": queued_info,
+    }
+    try:
+        await mrs.host_ws.send_json(msg)
+    except Exception:
+        pass
+
+
+async def _modal_activate_next_queued():
+    """Activate the next queued player if there's capacity."""
+    global modal_room_state
+    mrs = modal_room_state
+    if mrs is None or not mrs.is_active:
+        return
+    while mrs.queue and mrs.active_count < mrs.max_active:
+        next_pid = mrs.queue.pop(0)
+        ps = mrs.players.get(next_pid)
+        if ps is None or ps.status == "disconnected":
+            continue
+        # Spawn worker for this queued player
+        asyncio.create_task(_modal_spawn_player(mrs, ps))
+        break
+
+
+async def _modal_spawn_player(mrs: "ModalRoomState", ps: "ModalPlayerState"):
+    """Spawn a Modal worker and start inference loop for a player."""
+    ps.status = "initializing"
+    mrs.active_count += 1
+    await _modal_broadcast_player_list()
+
+    try:
+        await ps.websocket.send_json({
+            "type": "initializing",
+            "message": "Loading your world...",
+        })
+    except Exception:
+        ps.status = "disconnected"
+        mrs.active_count -= 1
+        await _modal_activate_next_queued()
+        return
+
+    try:
+        WorkerCls = _get_modal_worker_class()
+        worker = WorkerCls()
+        ps.worker = worker
+
+        # Init session on Modal (runs on remote GPU)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, lambda: worker.init_session.remote(
+                image_b64=mrs.seed_image_b64, mode=mrs.mode
+            )
+        )
+
+        ps.status = "active"
+        await _modal_broadcast_player_list()
+
+        # Send initial frame to player
+        await ps.websocket.send_json({
+            "type": "ready",
+            "mode": result["mode"],
+            "resolution": result["resolution"],
+        })
+        await ps.websocket.send_json({
+            "type": "frame",
+            "data": result["initial_frame_b64"],
+            "block": 0,
+        })
+
+        # Send initial frame to host grid
+        try:
+            await mrs.host_ws.send_json({
+                "type": "modal_player_frame",
+                "player_id": ps.player_id,
+                "player_name": ps.name,
+                "data": result["initial_frame_b64"],
+                "block": 0,
+            })
+        except Exception:
+            pass
+
+        # Send music if available
+        if mrs.music_urls:
+            try:
+                await ps.websocket.send_json({
+                    "type": "music_ready",
+                    "audio_urls": mrs.music_urls,
+                })
+            except Exception:
+                pass
+
+        # Start inference loop
+        ps.inference_task = asyncio.create_task(
+            _modal_player_inference_loop(mrs, ps.player_id)
+        )
+
+    except Exception as e:
+        logger.exception("[ModalRoom] Failed to spawn worker for %s", ps.name)
+        ps.status = "disconnected"
+        mrs.active_count -= 1
+        try:
+            await ps.websocket.send_json({
+                "type": "error",
+                "message": f"Failed to start your world: {str(e)[:100]}",
+            })
+        except Exception:
+            pass
+        await _modal_activate_next_queued()
+
+
+async def _modal_player_inference_loop(mrs: "ModalRoomState", player_id: str):
+    """Run inference blocks for one player until disconnect or room close."""
+    ps = mrs.players.get(player_id)
+    if ps is None:
+        return
+
+    worker = ps.worker
+    max_blocks = 999999  # effectively unlimited
+    block_num = 0
+    loop = asyncio.get_event_loop()
+
+    try:
+        for _ in range(max_blocks):
+            if not mrs.is_active or ps.status == "disconnected":
+                break
+
+            block_num += 1
+
+            # Request action from player
+            try:
+                await ps.websocket.send_json({
+                    "type": "request_action",
+                    "block": block_num,
+                })
+            except Exception:
+                break
+
+            # Wait for action (timeout → neutral)
+            try:
+                action = await asyncio.wait_for(ps.action_queue.get(), timeout=120.0)
+                if action is None:  # sentinel for disconnect
+                    break
+            except asyncio.TimeoutError:
+                action = {"keyboard": "q", "mouse": "u"}
+
+            # Run block on Modal worker
+            try:
+                result = await loop.run_in_executor(
+                    None, lambda a=action: worker.run_block.remote(action=a)
+                )
+            except Exception as e:
+                logger.warning("[ModalRoom] run_block failed for %s: %s", ps.name, e)
+                break
+
+            # Send frames to player
+            for frame_idx, frame_b64 in enumerate(result["frames_b64"]):
+                try:
+                    await ps.websocket.send_json({
+                        "type": "frame",
+                        "data": frame_b64,
+                        "block": block_num,
+                        "frame": frame_idx,
+                    })
+                except Exception:
+                    break
+                await asyncio.sleep(0.01)
+
+            # Send last frame to host grid
+            try:
+                await mrs.host_ws.send_json({
+                    "type": "modal_player_frame",
+                    "player_id": ps.player_id,
+                    "player_name": ps.name,
+                    "data": result["last_frame_b64"],
+                    "block": block_num,
+                })
+            except Exception:
+                pass
+
+            # Caption every 3 blocks
+            if block_num % 3 == 1:
+                asyncio.create_task(
+                    _modal_generate_caption(mrs, ps, result["last_frame_b64"], block_num)
+                )
+
+    except Exception as e:
+        logger.exception("[ModalRoom] Inference loop error for %s", ps.name)
+    finally:
+        # Cleanup
+        try:
+            await loop.run_in_executor(None, lambda: worker.end_session.remote())
+        except Exception:
+            pass
+        ps.status = "disconnected"
+        mrs.active_count -= 1
+        logger.info("[ModalRoom] Player %s loop ended (block=%d)", ps.name, block_num)
+        await _modal_broadcast_player_list()
+        await _modal_activate_next_queued()
+
+
+async def _modal_generate_caption(mrs: "ModalRoomState", ps: "ModalPlayerState",
+                                   frame_b64: str, block_num: int):
+    """Generate caption for a Modal player's frame via Claude API."""
+    try:
+        from suno_api.client import DEFAULT_ANTHROPIC_KEY
+
+        def _call_claude():
+            client = anthropic.Anthropic(
+                api_key=os.environ.get("ANTHROPIC_API_KEY", DEFAULT_ANTHROPIC_KEY)
+            )
+            msg = client.messages.create(
+                model="claude-sonnet-4-5-20250929",
+                max_tokens=100,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": frame_b64,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": (
+                                "You are a narrator for a real-time interactive world exploration game. "
+                                "Respond with EXACTLY two lines, nothing else:\n"
+                                "Line 1: A hex color code (e.g. #FF6B35) that will be maximally visible "
+                                "as caption text overlaid on this image.\n"
+                                "Line 2: A single short, atmospheric sentence (max 15 words). "
+                                "Be poetic and immersive. No quotes, no labels, just the narration."
+                            ),
+                        },
+                    ],
+                }],
+            )
+            return msg.content[0].text.strip()
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, _call_claude)
+
+        lines = result.strip().split("\n", 1)
+        color = "#e0e0e0"
+        caption_text = result
+        if len(lines) == 2 and lines[0].startswith("#") and len(lines[0]) == 7:
+            color = lines[0].strip()
+            caption_text = lines[1].strip()
+
+        # Send to player
+        try:
+            await ps.websocket.send_json({
+                "type": "caption",
+                "block": block_num,
+                "text": caption_text,
+                "color": color,
+            })
+        except Exception:
+            pass
+
+        # Send to host
+        try:
+            await mrs.host_ws.send_json({
+                "type": "modal_player_caption",
+                "player_id": ps.player_id,
+                "player_name": ps.name,
+                "block": block_num,
+                "text": caption_text,
+                "color": color,
+            })
+        except Exception:
+            pass
+
+    except Exception as e:
+        logger.warning("[ModalRoom] Caption failed for %s block %d: %s", ps.name, block_num, e)
+
+
+async def _close_modal_room():
+    """Close the Modal room: end all workers, notify all players."""
+    global modal_room_state
+    mrs = modal_room_state
+    if mrs is None:
+        return
+    mrs.is_active = False
+
+    # Stop all players
+    for pid, ps in list(mrs.players.items()):
+        # Send sentinel to action queue
+        try:
+            ps.action_queue.put_nowait(None)
+        except Exception:
+            pass
+        # Cancel inference task
+        if ps.inference_task and not ps.inference_task.done():
+            ps.inference_task.cancel()
+        # Notify player
+        try:
+            await ps.websocket.send_json({"type": "room_closed"})
+            await ps.websocket.close()
+        except Exception:
+            pass
+
+    # Notify host
+    try:
+        await mrs.host_ws.send_json({"type": "modal_room_closed"})
+    except Exception:
+        pass
+
+    logger.info("[ModalRoom] Room %s closed (%d players)", mrs.room_id, len(mrs.players))
+    modal_room_state = None
+
+
+# ── Modal Room endpoints ──
+
+@app.get("/modal-room/{room_id}", response_class=HTMLResponse)
+async def get_modal_room(room_id: str):
+    """Serve the mobile page for a Modal room player."""
+    global modal_room_state
+    if modal_room_state is None or modal_room_state.room_id != room_id or not modal_room_state.is_active:
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("Room not found", status_code=404)
+    return FileResponse("web_ui/remote.html")
+
+
+@app.websocket("/ws/modal-room/{room_id}")
+async def modal_room_websocket(websocket: WebSocket, room_id: str):
+    """WebSocket endpoint for Modal room players (per-player GPU worlds)."""
+    global modal_room_state
+    await websocket.accept()
+
+    mrs = modal_room_state
+    if mrs is None or mrs.room_id != room_id or not mrs.is_active:
+        await websocket.close(code=4004, reason="Room not found")
+        return
+
+    # Wait for join message
+    player_name = "Player"
+    try:
+        first = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
+        if first.get("type") == "join":
+            player_name = (first.get("name") or "Player")[:16]
+    except Exception:
+        await websocket.close(code=4000, reason="Join timeout")
+        return
+
+    # Create player state
+    player_id = f"p_{_generate_room_id(6)}"
+    ps = ModalPlayerState(
+        player_id=player_id,
+        name=player_name,
+        websocket=websocket,
+        worker=None,
+        status="queued",
+    )
+    mrs.players[player_id] = ps
+
+    logger.info("[ModalRoom] %s (%s) joined room %s", player_name, player_id, room_id)
+
+    # Check capacity
+    if mrs.active_count < mrs.max_active:
+        # Spawn immediately
+        asyncio.create_task(_modal_spawn_player(mrs, ps))
+    else:
+        # Add to queue
+        mrs.queue.append(player_id)
+        position = len(mrs.queue)
+        await websocket.send_json({
+            "type": "queued",
+            "position": position,
+            "message": f"You are #{position} in queue. Please wait...",
+        })
+        logger.info("[ModalRoom] %s queued at position %d", player_name, position)
+
+    await _modal_broadcast_player_list()
+
+    # Main message loop
+    try:
+        while True:
+            data = await websocket.receive_json()
+            msg_type = data.get("type")
+
+            if msg_type == "action":
+                # Player sending an action for their world
+                await ps.action_queue.put({
+                    "keyboard": data.get("keyboard", "q"),
+                    "mouse": data.get("mouse", "u"),
+                })
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        ps.status = "disconnected"
+        # Send sentinel to wake up inference loop
+        try:
+            ps.action_queue.put_nowait(None)
+        except Exception:
+            pass
+        # Remove from queue if still queued
+        if player_id in mrs.queue:
+            mrs.queue.remove(player_id)
+        logger.info("[ModalRoom] %s (%s) disconnected", player_name, player_id)
+        await _modal_broadcast_player_list()
+
+
 @app.get("/", response_class=HTMLResponse)
 async def get_index():
     """Serve the main HTML page."""
@@ -1600,6 +2064,46 @@ async def websocket_endpoint(websocket: WebSocket):
                     logger.info("[WS %s] Close room requested", client_label)
                     await _close_room()
 
+            elif msg_type == "open_modal_room":
+                if modal_room_state is not None:
+                    await websocket.send_json({"type": "error", "message": "Modal room already open"})
+                else:
+                    # Requires seed image (base64, no data: prefix)
+                    seed_image_b64 = data.get("seed_image_b64", "")
+                    mode = data.get("mode", "universal")
+
+                    if not seed_image_b64:
+                        # If data: prefix provided, strip it
+                        raw = data.get("image", "")
+                        if raw and "," in raw:
+                            seed_image_b64 = raw.split(",", 1)[1]
+                        elif raw:
+                            seed_image_b64 = raw
+
+                    if not seed_image_b64:
+                        await websocket.send_json({"type": "error", "message": "Seed image required for Modal room"})
+                    else:
+                        rid = _generate_room_id()
+                        modal_room_state = ModalRoomState(
+                            room_id=rid,
+                            host_ws=websocket,
+                            seed_image_b64=seed_image_b64,
+                            mode=mode,
+                        )
+                        lan_ip = _get_lan_ip()
+                        url = f"http://{lan_ip}:{server_port}/modal-room/{rid}"
+                        logger.info("[WS %s] Modal room opened: %s -> %s", client_label, rid, url)
+                        await websocket.send_json({
+                            "type": "modal_room_opened",
+                            "room_id": rid,
+                            "url": url,
+                        })
+
+            elif msg_type == "close_modal_room":
+                if modal_room_state and modal_room_state.host_ws == websocket:
+                    logger.info("[WS %s] Close modal room requested", client_label)
+                    await _close_modal_room()
+
             elif msg_type == "stop":
                 if inference_engine:
                     logger.info("[WS %s] Stop requested by client", client_label)
@@ -1609,6 +2113,53 @@ async def websocket_endpoint(websocket: WebSocket):
                     for w in inference_engine.worlds:
                         await w.action_queue.put(None)
                     await websocket.send_json({"type": "stopped"})
+
+            elif msg_type == "restart_with_frame":
+                frame_data = data.get("data")
+                if inference_engine and frame_data:
+                    logger.info("[WS %s] Restart with painted frame requested (%d KB)",
+                                client_label, len(frame_data) // 1024)
+                    # Stop current inference if running
+                    if inference_engine.is_running:
+                        inference_engine.stop()
+                        for w in inference_engine.worlds:
+                            await w.action_queue.put(None)
+                        # Wait for inference to fully stop
+                        wait_start = _time.perf_counter()
+                        while inference_engine.is_running:
+                            await asyncio.sleep(0.05)
+                            if _time.perf_counter() - wait_start > 10:
+                                logger.error("[WS %s] Timeout waiting for inference to stop", client_label)
+                                await websocket.send_json({"type": "error", "message": "Restart timeout"})
+                                break
+                        else:
+                            logger.info("[WS %s] Old inference stopped, restarting with painted frame", client_label)
+                            img_input = f"data:image/jpeg;base64,{frame_data}"
+                            try:
+                                asyncio.create_task(
+                                    inference_engine.run_inference(img_input, websocket))
+                            except Exception as e:
+                                logger.exception("[WS %s] Failed to restart inference", client_label)
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": f"Restart failed: {str(e)}"
+                                })
+                    else:
+                        # Not running — just start fresh with the frame
+                        logger.info("[WS %s] Not running, starting fresh with painted frame", client_label)
+                        img_input = f"data:image/jpeg;base64,{frame_data}"
+                        try:
+                            asyncio.create_task(
+                                inference_engine.run_inference(img_input, websocket))
+                        except Exception as e:
+                            logger.exception("[WS %s] Failed to start inference with painted frame", client_label)
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": f"Start failed: {str(e)}"
+                            })
+                else:
+                    logger.warning("[WS %s] restart_with_frame: missing engine or frame data", client_label)
+
             else:
                 logger.warning("[WS %s] Unknown message type=%s", client_label, msg_type)
 
@@ -1616,6 +2167,8 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info("[WS %s] Disconnected", client_label)
         if room_state and room_state.host_ws == websocket:
             await _close_room()
+        if modal_room_state and modal_room_state.host_ws == websocket:
+            await _close_modal_room()
         if inference_engine:
             inference_engine.stop()
             for w in inference_engine.worlds:
@@ -1624,6 +2177,8 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.exception("[WS %s] WebSocket error", client_label)
         if room_state and room_state.host_ws == websocket:
             await _close_room()
+        if modal_room_state and modal_room_state.host_ws == websocket:
+            await _close_modal_room()
         if inference_engine:
             inference_engine.stop()
             for w in inference_engine.worlds:
