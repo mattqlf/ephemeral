@@ -2317,7 +2317,7 @@
         // ── Paint System (image paste + move/resize) ──
         function initPaintLayer() {
             const cell = worldCanvases[0].canvas.parentElement;
-            if (!cell) return;
+            if (!cell) { console.warn('[paint] initPaintLayer: no cell for world 0'); return; }
 
             if (paintLayer) { paintLayer.remove(); paintLayer = null; }
             paintObjects.forEach(o => o.el.remove());
@@ -2333,6 +2333,7 @@
             const vc = worldCanvases[0].canvas;
             paintLayer.style.width = vc.style.width;
             paintLayer.style.height = vc.style.height;
+            console.log('[paint] initPaintLayer: created', paintLayer.style.width, 'x', paintLayer.style.height);
 
             // Click on empty area deselects
             paintLayer.addEventListener('mousedown', () => paintDeselectAll());
@@ -2345,6 +2346,7 @@
                 if (file && file.type.startsWith('image/')) {
                     const url = URL.createObjectURL(file);
                     const pos = paintGetPos(e);
+                    console.log('[paint] drop: image at', pos.x, pos.y);
                     paintAddImage(url, pos.x, pos.y);
                 }
             });
@@ -2353,6 +2355,7 @@
         function togglePaintMode() {
             paintMode = !paintMode;
             paintToggle.classList.toggle('active', paintMode);
+            console.log('[paint] togglePaintMode:', paintMode);
 
             if (paintMode) {
                 if (!paintLayer) initPaintLayer();
@@ -2379,11 +2382,13 @@
         // ── Paste images ──
         document.addEventListener('paste', (e) => {
             if (!paintMode) return;
+            console.log('[paint] paste event, items:', e.clipboardData?.items?.length);
             for (const item of e.clipboardData?.items || []) {
                 if (item.type.startsWith('image/')) {
                     e.preventDefault();
                     const blob = item.getAsFile();
                     const url = URL.createObjectURL(blob);
+                    console.log('[paint] paste: image blob', blob.size, 'bytes');
                     paintAddImage(url);
                     break;
                 }
@@ -2391,13 +2396,16 @@
         });
 
         function paintAddImage(src, dropX, dropY) {
-            if (!paintLayer) return;
+            if (!paintLayer) { console.warn('[paint] paintAddImage: no paintLayer'); return; }
+            console.log('[paint] paintAddImage: loading', src.substring(0, 60) + '...');
 
             const img = new Image();
             img.crossOrigin = 'anonymous';
+            img.onerror = (err) => console.error('[paint] paintAddImage: image load failed', err);
             img.onload = () => {
                 let w = img.width, h = img.height;
                 const cw = canvas.width, ch = canvas.height;
+                console.log('[paint] image loaded:', w, 'x', h, '→ canvas:', cw, 'x', ch);
                 const maxW = cw * 0.35, maxH = ch * 0.45;
                 if (w > maxW) { h *= maxW / w; w = maxW; }
                 if (h > maxH) { w *= maxH / h; h = maxH; }
@@ -2438,6 +2446,7 @@
 
                 const obj = { el, x, y, w, h, imgSrc: src };
                 paintObjects.push(obj);
+                console.log('[paint] object added, total:', paintObjects.length, 'pos:', Math.round(x), Math.round(y), 'size:', w, 'x', h);
                 paintSelectObject(obj);
 
                 // Drag to move
@@ -2485,6 +2494,7 @@
             obj.el.remove();
             paintObjects = paintObjects.filter(o => o !== obj);
             if (paintSelected === obj) paintSelected = null;
+            console.log('[paint] removed object, remaining:', paintObjects.length);
         }
 
         // Global mouse move/up for paint object drag/resize
@@ -2528,7 +2538,9 @@
         document.getElementById('paintApplyBtn').addEventListener('click', paintApply);
 
         function paintApply() {
-            if (!paintLayer || !canvas || paintObjects.length === 0) return;
+            console.log('[paint] apply: paintLayer=', !!paintLayer, 'canvas=', !!canvas, 'objects=', paintObjects.length);
+            if (!paintLayer || !canvas) { console.warn('[paint] apply: no paintLayer or canvas'); return; }
+            if (paintObjects.length === 0) { console.warn('[paint] apply: no objects to composite'); return; }
             const cw = canvas.width, ch = canvas.height;
 
             const composite = document.createElement('canvas');
@@ -2540,15 +2552,17 @@
             cCtx.drawImage(canvas, 0, 0);
 
             // 2. Pasted objects
-            const loadPromises = paintObjects.map(obj => {
+            const objCount = paintObjects.length;
+            const loadPromises = paintObjects.map((obj, i) => {
                 return new Promise(resolve => {
                     const img = new Image();
                     img.crossOrigin = 'anonymous';
                     img.onload = () => {
+                        console.log('[paint] apply: drawing object', i + 1, '/', objCount, 'at', Math.round(obj.x), Math.round(obj.y), obj.w, 'x', obj.h);
                         cCtx.drawImage(img, obj.x, obj.y, obj.w, obj.h);
                         resolve();
                     };
-                    img.onerror = resolve;
+                    img.onerror = (err) => { console.error('[paint] apply: object', i, 'image load failed', err); resolve(); };
                     img.src = obj.imgSrc;
                 });
             });
@@ -2571,16 +2585,20 @@
                     caption: activeCaptionText,
                     captionColor: activeCaptionColor,
                 });
+                console.log('[paint] apply: composited', objCount, 'objects, recorded frame', recordedFrames.length);
 
                 // Clear objects
                 paintObjects.forEach(o => o.el.remove());
                 paintObjects = [];
                 paintSelected = null;
 
+                // Exit paint mode so keyboard actions resume
+                togglePaintMode();
+
                 // Flash
                 const flash = document.createElement('div');
                 flash.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,212,170,0.15);z-index:9;pointer-events:none;';
-                paintLayer.appendChild(flash);
+                if (paintLayer) paintLayer.appendChild(flash);
                 setTimeout(() => flash.remove(), 200);
             });
         }
